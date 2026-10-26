@@ -1,0 +1,18 @@
+uwb_position_publisher:
+  ros__parameters:
+    uwb_distances_topic: "/uwb/distances"
+    uwb_position_topic: "/uwb/position"
+    anchor_1_x: -0.67
+    anchor_1_y: -3.62
+    anchor_2_x: 6.18
+    anchor_2_y: -3.63
+    anchor_3_x: 3.57
+    anchor_3_y: 1.86
+    # Tag height minus each anchor height [m]; negative values are allowed.
+    anchor_1_height_difference_m: -1.3
+    anchor_2_height_difference_m: -1.3
+    anchor_3_height_difference_m: -1.3
+    min_anchor_determinant: 1.0e-9
+    moving_average_window: 5
+    max_position_jump_m: 1.0
+    filter_reset_on_invalid: true

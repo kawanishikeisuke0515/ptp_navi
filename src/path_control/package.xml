@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>path_control</name><version>0.1.0</version>
+  <description>Autonomous straight path tracking using UWB robot poses.</description>
+  <maintainer email="user@example.com">user</maintainer><license>Apache-2.0</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend><exec_depend>rcl_interfaces</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend><exec_depend>std_msgs</exec_depend>
+  <exec_depend>launch</exec_depend><exec_depend>launch_ros</exec_depend>
+  <exec_depend>zed_wrapper_data_hub</exec_depend>
+  <exec_depend>zed_heading_publisher</exec_depend>
+  <exec_depend>uwb_position_publisher</exec_depend>
+  <exec_depend>uwb_robot_pose_publisher</exec_depend>
+  <exec_depend>locomotion_core_rpm</exec_depend>
+  <exec_depend>jetson_power_publisher</exec_depend>
+  <test_depend>python3-pytest</test_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

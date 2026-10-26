@@ -1,0 +1,22 @@
+path_control:
+  ros__parameters:
+    # Set both goal_x and goal_y [m] in the UWB world frame before starting.
+    # goal_x: 1.0
+    # goal_y: 2.0
+    pose_topic: /uwb/robot_pose
+    command_topic: /rov_cmd_vel
+    status_topic: /path_control/status
+    world_frame_id: world
+    control_rate_hz: 20.0
+    path_speed_m_s: 0.3
+    min_linear_speed_m_s: 0.05
+    max_linear_speed_m_s: 0.5
+    cross_track_gain: 1.0
+    heading_gain: 1.0
+    max_angular_speed_rad_s: 0.3
+    init_timeout_sec: 10.0
+    position_timeout_sec: 0.6
+    heading_timeout_sec: 0.6
+    init_sample_count: 10
+    goal_tolerance_m: 0.10
+    goal_hold_sec: 2.0

@@ -1,0 +1,9 @@
+uwb_distance_publisher:
+  ros__parameters:
+    serial_port: "/dev/serial/by-id/usb-Arduino_Stella_DA6CCE29E172D7E7-if00"
+    baudrate: 115200
+    read_timeout: 0.1
+    reconnect_interval: 1.0
+    invalid_distance_cm: 65535
+    frame_id: "uwb"
+    timer_period: 0.01

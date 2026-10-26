@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jetson Power Publisher 仕様書</title>
+<style>
+:root { color-scheme: light; font-family: system-ui, -apple-system, "Noto Sans JP", sans-serif; color: #1e293b; background: #f1f5f9; }
+body { margin: 0; line-height: 1.8; }
+main { max-width: 1100px; margin: 32px auto; padding: 40px; background: white; border-radius: 12px; }
+h1 { font-size: 2rem; border-bottom: 3px solid #2563eb; padding-bottom: 16px; }
+h2 { margin-top: 48px; border-bottom: 1px solid #cbd5e1; padding-bottom: 8px; }
+h3 { margin-top: 28px; }
+a { color: #1d4ed8; }
+code { font-family: ui-monospace, monospace; background: #f1f5f9; padding: 2px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+pre { padding: 20px; background: #0f172a; color: #e2e8f0; overflow-x: auto; border-radius: 8px; line-height: 1.6; }
+pre code { background: none; padding: 0; overflow-wrap: normal; }
+.table-wrap { overflow-x: auto; margin: 20px 0; }
+table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+th, td { border: 1px solid #cbd5e1; text-align: left; padding: 10px 12px; vertical-align: top; min-width: 100px; }
+th { background: #e2e8f0; }
+tr:nth-child(even) td { background: #f8fafc; }
+li { margin: 5px 0; }
+.source { color: #64748b; font-size: .9rem; }
+@media (max-width: 700px) { main { margin: 0; padding: 20px 16px; border-radius: 0; } h1 { font-size: 1.6rem; } }
+@media print { :root { background: white; } main { margin: 0; padding: 0; max-width: none; } pre { white-space: pre-wrap; background: #f1f5f9; color: #1e293b; } .table-wrap { overflow: visible; } th, td { min-width: 0; } h2, h3 { break-after: avoid; } }
+</style>
+</head>
+<body><main>
+<p class="source">原本：<a href="jetson_power_publisher_spec_ja.md">jetson_power_publisher_spec_ja.md</a></p>
+<h1>Jetson Power Publisher 仕様書</h1>
+<p>Version: 0.1 draft<br />
+Date: 2026-09-18<br />
+Status: 初期実装済み。実機出力・負荷・権限の確認待ち。</p>
+<h2>1. 目的と対象</h2>
+<p>Jetson Orin Nanoのモジュール消費電力をROS 2トピックとして配信し、ドッキング実験の位置・姿勢・制御指令とともに記録する。</p>
+<p>対象環境はJetson Orin Nano、ユーザー申告のJetson Linux「R36、REVISION 4.7」。JetPackのバージョンは推定せず、実装前に <code>/etc/nv_tegra_release</code> と実機の <code>tegrastats</code> 出力を確認する。</p>
+<p>計測対象は <code>tegrastats</code> の <code>VDD_IN</code>。これは電源系統の名前であり、表示値は電圧ではなく、その系統の現在電力・平均電力である。NVIDIA資料ではOrin NanoのVDD_INをTotal Module Powerと定義している。</p>
+<p>キャリアボード、外部機器、モーター、電源変換損失を含むロボット全体の計測値とは扱わない。各電源レールは計測範囲が重複し得るため合算しない。</p>
+<p>対象と計測方法は合意済み。以下の型名、パラメータ、異常時動作は初期実装の仕様案とする。</p>
+<h2>2. 構成と責務</h2>
+<pre><code class="language-text">tegrastats --interval 1000
+  └─ 標準出力 → jetson_power_publisher → /jetson/power
+                                          └─ docking_logger
+                                               ├─ jetson_power.csv
+                                               └─ timeline.csv
+</code></pre>
+<ul>
+<li><code>jetson_power_publisher</code>：独立したROS 2 Pythonパッケージ・同名ノード。子プロセス管理、行の解析、単位変換、有効性判定、Publishを担当する。</li>
+<li><code>jetson_interfaces</code>：新規のROS 2インターフェースパッケージ。<code>JetsonPower.msg</code> を定義する。</li>
+<li><code>docking_logger</code>：受信値を変換・再計算せず既存の非同期CSVライターで保存する。</li>
+<li>電力量[Wh]の積算は初版ではログの後処理とする。欠測区間は無条件に補間しない。</li>
+<li>CPU/GPU使用率、温度、レール別詳細、電力制限の変更は初版の対象外。</li>
+</ul>
+<p>ノード、設定YAML、単体launch、テストと <code>jetson_interfaces</code> を配置済み。</p>
+<h2>3. ROSインターフェース</h2>
+<p>トピック：<code>/jetson/power</code><br />
+型：<code>jetson_interfaces/msg/JetsonPower</code><br />
+QoS：Reliable / Volatile / Keep Last、depth=10。</p>
+<pre><code class="language-text">std_msgs/Header header
+string total_power_rail
+float64 power_w
+float64 average_power_w
+bool valid
+string status
+string raw_line
+</code></pre>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>フィールド</th>
+<th>定義</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>header.stamp</td>
+<td>出力行をノードが受信したROS時刻。ハードウェア計測時刻ではない</td>
+</tr>
+<tr>
+<td>header.frame_id</td>
+<td>空文字。空間座標系を持たないため</td>
+</tr>
+<tr>
+<td>total_power_rail</td>
+<td>対象レール名。初期値 <code>VDD_IN</code></td>
+</tr>
+<tr>
+<td>power_w</td>
+<td>tegrastatsが報告した現在電力をWに変換した値</td>
+</tr>
+<tr>
+<td>average_power_w</td>
+<td>tegrastatsが報告した平均電力をWに変換した値</td>
+</tr>
+<tr>
+<td>valid</td>
+<td>現在電力・平均電力の両方が解析でき、有限かつ0以上ならtrue</td>
+</tr>
+<tr>
+<td>status</td>
+<td><code>ok</code> / <code>parse_error</code> / <code>rail_missing</code> / <code>timeout</code> / <code>process_exited</code></td>
+</tr>
+<tr>
+<td>raw_line</td>
+<td>解析対象の元の1行。末尾改行のみ除去</td>
+</tr>
+</tbody>
+</table></div>
+<p>平均値の集計期間は実機で未確認。直近1秒平均、実験全体平均、ノード独自の移動平均とは表記しない。子プロセスの再起動前後で平均値の連続性を仮定しない。</p>
+<h2>4. 取得と解析</h2>
+<ol>
+<li>ノード起動時に <code>tegrastats</code> を1プロセス起動し、継続して標準出力を読み取る。周期ごとのプロセス起動は行わない。</li>
+<li>出力行を受信した時点でROS時刻と単調増加時計を取得する。</li>
+<li>設定されたレール名と完全一致する電力項目を抽出する。他のレールや温度・使用率から代用しない。</li>
+<li><code>現在値/平均値</code> をmWとして読み、各値を1000で割ってWに変換する。</li>
+<li>通常は出力行ごとに1メッセージをPublishする。同じ測定値をタイマーで繰り返し正常値として送信しない。</li>
+</ol>
+<p>対応予定の表記例（実機出力ではなく解析仕様の例）：</p>
+<pre><code class="language-text">VDD_IN 5000mW/4500mW
+VDD_IN 5000/4500
+</code></pre>
+<p>整数・小数、単位付き・単位なしの上記形式に対応する。未知の単位、片側欠落、非有限値、負値、対象レールの重複は解析エラーとする。対象レール自体がない場合は <code>rail_missing</code>。0 Wは欠測を意味しない。</p>
+<h2>5. 異常時とプロセス管理</h2>
+<ul>
+<li>解析失敗・対象レール欠落：当該行に対して <code>valid=false</code>、両電力値をNaN、元の行とエラーstatusを配信する。</li>
+<li>起動後または最後の行受信から <code>output_timeout_sec</code> を超えて行が届かない：<code>timeout</code> を配信する。判定には単調増加時計を使う。</li>
+<li>子プロセス終了：<code>process_exited</code> を配信する。初版は自動再起動しない。ノードは異常状態を配信し続け、復旧にはノード再起動を必要とする。</li>
+<li>行を伴わない異常通知のheader.stampは通知時刻、raw_lineは空文字とする。両電力値はNaN、validはfalse。</li>
+<li>異常検知時に1回通知し、無出力・終了状態が続く間は <code>interval_ms</code> 相当の周期で異常通知を続ける。出力が再開したtimeout状態は次の行の結果で復帰する。</li>
+<li>実行ファイルなし・起動権限不足・不正パラメータは起動失敗として理由を出力し終了する。ロガー側は未受信状態になる。</li>
+<li>標準出力待ちでROSコールバックを停止させない。専用読取処理を用い、stderrも排出してパイプ詰まりを防ぐ。警告は頻度制限する。</li>
+<li>shellを介さず引数リストで起動する。ノード内でsudoを実行しない。</li>
+<li>終了時には自分が生成したプロセスだけをterminateし、2秒以内に終了しなければkillして回収する。他のtegrastatsも停止させる <code>--stop</code> や <code>pkill</code> は使わない。</li>
+<li>初版は実時間の実機計測を対象とし、<code>use_sim_time=true</code> は起動時エラーとする。</li>
+</ul>
+<h2>6. パラメータ</h2>
+<p>全パラメータは起動時に確定し、変更時はノードを再起動する。</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>名前</th>
+<th>初期値</th>
+<th>条件・意味</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tegrastats_path</td>
+<td><code>tegrastats</code></td>
+<td>PATHで解決する実行名、または実行ファイルのパス。空文字不可</td>
+</tr>
+<tr>
+<td>power_topic</td>
+<td><code>/jetson/power</code></td>
+<td>Publish先。空文字不可</td>
+</tr>
+<tr>
+<td>total_power_rail</td>
+<td><code>VDD_IN</code></td>
+<td>完全一致で抽出するレール名。空文字・空白を含む名前は不可</td>
+</tr>
+<tr>
+<td>interval_ms</td>
+<td><code>1000</code></td>
+<td>正の整数。tegrastatsの出力間隔[ms]</td>
+</tr>
+<tr>
+<td>output_timeout_sec</td>
+<td><code>3.0</code></td>
+<td>有限で取得間隔より大きい値。起動直後も同じ閾値</td>
+</tr>
+</tbody>
+</table></div>
+<p>1秒周期と3秒のtimeoutは初期値であり、実測した出力間隔・処理負荷を見て評価する。周期短縮がセンサー自体の更新速度向上を保証するわけではない。</p>
+<h2>7. docking_logger連携</h2>
+<p>ストリーム名を <code>jetson_power</code>、購読パラメータを <code>jetson_power_topic</code>（初期値 <code>/jetson/power</code>）とする。既存のQoS・鮮度設定方式に従う。</p>
+<p><code>jetson_power.csv</code> の列：</p>
+<pre><code class="language-text">sample_seq, recv_ros_time_ns, elapsed_sec, source_stamp_ns, frame_id,
+total_power_rail, power_w, average_power_w, valid, status, raw_line
+</code></pre>
+<ul>
+<li>共通列の時刻・シーケンス定義、NaNのCSV表現、書き込み失敗時の処理は既存ロガーに従う。</li>
+<li><code>timeline.csv</code> に上記列とreceived / age_sec / stale / value_validを <code>jetson_power_</code> 接頭辞で追加する。</li>
+<li><code>value_valid</code> はmsg.valid、両電力値の有限性・非負性で判定する。</li>
+<li><code>jetson_power_stale_timeout_sec</code> の初期値は3秒とする。既存の全体初期値1秒では1 Hz取得時に境界付近でstaleになり得るため、設定YAMLで明示する。</li>
+<li>異常通知の受信はageを更新する。そのためstale=falseでもvalue_valid=falseになり得る。staleはトピック受信の鮮度であり、正常計測の保証ではない。</li>
+<li>timelineは各ストリームの最新値を保持する。20 Hzのtimelineに1 Hzの電力値が繰り返し現れても新規計測とは扱わない。解析時はsource_stamp_nsまたはsample_seqで識別する。</li>
+<li>metadataに計測範囲「Jetson module / configured rail」、単位W、平均値はtegrastats報告値であることを記載する。設定スナップショットを渡す場合は取得ノードのYAMLも含める。</li>
+<li>schema_version=4。電力ストリームとタイムライン列を追加済み。</li>
+</ul>
+<p>ロガー単体launchは計測ノードを起動しない。計測ノード専用launchを用意し、統合bringupへの追加は別途行う。計測ノード未起動でも既存ストリームの記録は続ける。</p>
+<h2>8. 検証・受け入れ条件</h2>
+<h3>実機なしの検証</h3>
+<ul>
+<li>単位付き・単位なし、小数、複数レールを含む行からVDD_INだけを取得できる。</li>
+<li>5000/4500を5.0/4.5 Wに変換し、0を有効として保持する。</li>
+<li>欠落、重複、不正単位、負値、NaN/Infを正常値として配信しない。</li>
+<li>模擬プロセスで無出力、stderr出力、途中終了、出力再開、終了時の回収を確認する。</li>
+<li>ROSメッセージの時刻・status・NaNと、CSV・timeline・metadataへの保存を確認する。</li>
+<li>未受信、正常、異常通知受信、トピック停止をreceived / value_valid / staleで区別できる。</li>
+</ul>
+<h3>実機での確認事項</h3>
+<ul>
+<li><code>/etc/nv_tegra_release</code>、Orin Nanoの機種情報、<code>tegrastats --interval 1000</code> の数行を採取する。</li>
+<li>VDD_INの存在、単位表記、一般ユーザーでの実行可否、出力間隔を確認する。</li>
+<li>アイドル時と処理負荷を掛けた時で、元出力とトピックの値・単位が一致することを確認する。</li>
+<li>docking_loggerと同時実行してCSVを取得し、制御処理への影響と欠測を確認する。</li>
+<li>ノード停止後に子プロセスが残らず、他のtegrastatsプロセスを停止しないことを確認する。</li>
+</ul>
+<h2>9. 参照資料</h2>
+<ul>
+<li><a href="https://docs.nvidia.com/jetson/archives/r36.4/DeveloperGuide/SD/PlatformPowerAndPerformance/JetsonOrinNanoSeriesJetsonOrinNxSeriesAndJetsonAgxOrinSeries.html">NVIDIA：Orin Nano / NXの電力監視とVDD_INの計測範囲（R36.4）</a></li>
+<li><a href="https://docs.nvidia.com/jetson/archives/r36.4.3/DeveloperGuide/AT/JetsonLinuxDevelopmentTools/TegrastatsUtility.html">NVIDIA：Tegrastats Utility、電力表示とinterval（R36.4.3）</a></li>
+<li><a href="../../docking_logger/doc/docking_logger_spec_ja.md">既存docking_logger仕様書</a></li>
+</ul>
+<p>参照資料はR36系の公開資料。申告されたREVISION 4.7での具体的な出力形式は、上記の実機確認で確定する。</p>
+<h2>10. ビルドと起動</h2>
+<p>ROS 2環境をsourceしたワークスペースで実行する。</p>
+<pre><code class="language-bash">colcon build --packages-up-to jetson_power_publisher docking_logger
+source install/setup.bash
+ros2 launch jetson_power_publisher jetson_power_publisher.launch.py
+</code></pre>
+<p>別端末でも同じ環境をsourceして確認・記録する。</p>
+<pre><code class="language-bash">ros2 topic echo /jetson/power
+ros2 launch docking_logger docking_logger.launch.py target_marker_id:=7
+</code></pre>
+<p><code>target_marker_id</code> は実験対象に合わせる。取得周期などは設定YAMLを変更し、launchの <code>config:=/path/to/config.yaml</code> で指定できる。tegrastatsはJetson実機側にインストールされているものを使用する。</p>
+</main></body>
+</html>

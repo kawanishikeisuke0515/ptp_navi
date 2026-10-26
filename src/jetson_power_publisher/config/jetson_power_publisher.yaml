@@ -1,0 +1,7 @@
+jetson_power_publisher:
+  ros__parameters:
+    tegrastats_path: tegrastats
+    power_topic: /jetson/power
+    total_power_rail: VDD_IN
+    interval_ms: 1000
+    output_timeout_sec: 3.0

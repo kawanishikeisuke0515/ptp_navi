@@ -1,0 +1,72 @@
+# Override parameters for using the official zed_wrapper as this robot's
+# ZED data hub. This file is passed to zed_camera.launch.py through
+# ros_params_override_path.
+---
+/**:
+  ros__parameters:
+    general:
+      camera_name: 'zed2i'
+      camera_model: 'zed2i'
+      grab_resolution: 'HD720'
+      grab_frame_rate: 30
+      pub_resolution: 'CUSTOM'
+      pub_downscale_factor: 2.0
+      pub_frame_rate: 15.0
+      grab_compute_capping_fps: 30.0
+      publish_status: true
+
+    video:
+      publish_rgb: true
+      publish_left_right: false
+      publish_raw: false
+      publish_gray: false
+      publish_stereo: false
+
+    sensors:
+      sensors_pub_rate: 50.0
+      publish_imu: true
+      publish_imu_raw: false
+      publish_cam_imu_transf: false
+      publish_mag: true
+      publish_baro: false
+      publish_temp: false
+
+    depth:
+      # Positional tracking can be disabled by depth_mode NONE in the official
+      # wrapper, so keep a light depth mode while suppressing depth outputs.
+      depth_mode: 'NEURAL_LIGHT'
+      point_cloud_freq: 5.0
+      publish_depth_map: false
+      publish_depth_info: false
+      publish_point_cloud: false
+      publish_depth_confidence: false
+      publish_disparity: false
+
+    pos_tracking:
+      pos_tracking_enabled: true
+      pos_tracking_mode: 'AUTO'
+      imu_fusion: true
+      publish_tf: true
+      publish_map_tf: true
+      map_frame: 'map'
+      odometry_frame: 'odom'
+      area_memory: false
+      publish_3d_landmarks: false
+      two_d_mode: true
+      fixed_z_value: 0.0
+      publish_odom_pose: true
+      publish_pose_cov: false
+      publish_cam_path: false
+
+    mapping:
+      mapping_enabled: false
+      publish_det_plane: false
+
+    object_detection:
+      od_enabled: false
+
+    body_tracking:
+      bt_enabled: false
+
+    stream_server:
+      stream_enabled: false

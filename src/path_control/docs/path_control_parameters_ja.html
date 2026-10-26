@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Path Control 全体仕様</title><style>
+:root{color-scheme:light;--ink:#1b2e41;--blue:#185b87;--line:#d7e2eb}
+*{box-sizing:border-box}body{margin:0;background:#eef3f7;color:var(--ink);font:16px/1.85 system-ui,-apple-system,"Segoe UI","Noto Sans JP",sans-serif}
+main{max-width:1040px;margin:36px auto;padding:48px 56px;background:#fff;border-radius:12px;box-shadow:0 8px 32px #1636520d}
+.eyebrow{margin:0;color:var(--blue);font-size:.8rem;font-weight:700;letter-spacing:.12em}
+h1{font-size:2rem;line-height:1.4;margin:12px 0 20px}h2{margin-top:38px;font-size:1.3rem;border-bottom:2px solid var(--blue);padding-bottom:8px}
+p{margin:16px 0}li{margin:10px 0}ul{padding-left:24px}
+.table-wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;margin:24px 0;font-size:.94rem}th,td{border:1px solid var(--line);padding:12px 15px;text-align:left;vertical-align:top}th{background:#edf4f9}tbody tr:nth-child(even){background:#f8fafc}
+code{font: .9em ui-monospace,SFMono-Regular,Consolas,monospace;background:#edf3f8;color:#18547d;padding:2px 5px;border-radius:4px}
+a{color:var(--blue)}footer{margin-top:36px;border-top:1px solid var(--line);padding-top:16px;font-size:.85rem;color:#647587}
+@media(max-width:700px){main{margin:0;padding:28px 20px;border-radius:0}h1{font-size:1.6rem}th,td{padding:9px}}
+@media print{body{background:white}main{max-width:none;margin:0;padding:0;box-shadow:none}h2{break-after:avoid}tr{break-inside:avoid}footer{display:none}}
+pre{background:#edf3f8;padding:18px;overflow-x:auto;line-height:1.7;border-left:3px solid #185b87}pre code{background:none;padding:0}nav{display:flex;flex-wrap:wrap;gap:12px;margin:20px 0}</style></head><body><main><p class="eyebrow">PTP NAVI / PATH CONTROL</p><nav aria-label="目次"><a href="#section-1">構成</a><a href="#section-2">入出力</a><a href="#section-3">パラメーター</a><a href="#section-5">制御式</a><a href="#section-8">状態遷移</a><a href="#section-10">未決定事項</a></nav><h1>Path Control 全体仕様</h1>
+<p>2026-10-26｜実装仕様・実機未検証</p>
+<p>添付の「直線 Path Control 仕様書」ドラフトv1.0を基に、採用済みの制御周期・回転速度上限・初期化タイムアウトと、deadmanを使用しない構成を反映した。ファイル名は既存リンクを維持するため従来のままとする。未決定事項は末尾にまとめる。</p>
+<h2 id="section-1">1. 目的とシステム構成</h2>
+<p>全方向移動ロボットを、始点Aから終点Bへ向かう直線経路に沿って走行させる。経路方向の移動、横ずれ補正、車体方向の補正を同時に行う。目標車体方向は走行中、A→Bの方向に固定する。</p>
+<pre><code class="language-text">UWB機器（有効5 Hz）
+  ↓ シリアル距離
+uwb_position_publisher（距離取得＋位置推定＋5点移動平均）
+  ↓ /uwb/position
+  ├──────────────────────────────┐
+ZED → zed_heading_publisher → /zed/heading   │
+  └──────────────────────────────┤
+                    uwb_robot_pose_publisher
+                    時刻同期・タグ位置から車体中心への補正
+                              ↓ /uwb/robot_pose
+                    path_control（本仕様・20 Hz）
+                              ↓ /rov_cmd_vel
+                    locomotion_core_rpm
+                    Twist → 車輪RPM（20 Hz）
+                              ↓ /rov/motor_rpm
+                    Roboteqドライバ → モーター
+</code></pre>
+<p>上図の位置・方位はともに <code>uwb_robot_pose_publisher</code> に入力する。Path Controlへの統合入力を <code>/uwb/robot_pose</code> とする想定。Jetson電力配信は監視用途であり、経路制御の必須入力にはしない。</p>
+<h2 id="section-2">2. 座標系と入出力</h2>
+<p>ワールド座標の+x方向を姿勢角0、反時計回りを正とする。車体座標は前方+x、左方向+y、反時計回りの回転+z。位置と終点は同じUWBワールド座標系で表し、単位はm、姿勢角はrad。</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>方向</th>
+<th>トピック・設定</th>
+<th>型・内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>入力</td>
+<td><code>/uwb/robot_pose</code></td>
+<td><code>geometry_msgs/PoseStamped</code>。補正済み車体中心位置PとQuaternion姿勢。実効約5 Hz</td>
+</tr>
+<tr>
+<td>設定</td>
+<td>終点B = (goal_x, goal_y)</td>
+<td>同じワールド座標系の終点[m]。YAMLファイルのROSパラメーター <code>goal_x</code>・<code>goal_y</code> で起動時に指定する</td>
+</tr>
+<tr>
+<td>算出</td>
+<td>始点A</td>
+<td>起動・復帰後の新規有効車体中心位置10個の平均。走行中固定</td>
+</tr>
+<tr>
+<td>出力</td>
+<td><code>/rov_cmd_vel</code></td>
+<td><code>geometry_msgs/Twist</code>。linear.x/y [m/s]、angular.z [rad/s]。20 Hz</td>
+</tr>
+<tr>
+<td>出力</td>
+<td>状態・異常通知</td>
+<td>状態、異常理由、解除を通知。<code>/path_control/status</code>（std_msgs/String、JSON）、20 Hz</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>/deadman</code> は使用しない。Path Controlが非ゼロ指令を出すと下位系が駆動する。INIT・ERROR・GOAL_CHECK・COMPLETEではゼロ指令を継続する。指令の発行元は一つにする。別の開始操作は設けず、起動後の初期化が完了したら自動で走行を開始する。ERRORからの復帰時もINITでの再初期化完了後に自動で再開する。</p>
+<h3>座標整合の確認点</h3>
+<p>既存の <code>uwb_robot_pose_publisher</code> は、ZEDの <code>robot_yaw_rad</code> にπ/2を加えた角度でタグ補正と姿勢出力を行う。これがUWBワールド+x方向＝yaw 0と一致するか実機で確認する。Path Control側で同じ補正を重ねない。</p>
+<p>校正ツールは校正開始時の向きを基準としたzero_heading_degを生成する。その開始方向とUWBワールド軸の対応も確認が必要。</p>
+<h3>終点Bの設定</h3>
+<p>終点は起動時にYAMLから読み込む <code>goal_x</code>・<code>goal_y</code> [m] で指定する。以下は設定書式の例で、座標は実際の目標に置き換える。ノード名は <code>path_control</code> を想定する。</p>
+<pre><code class="language-yaml">path_control:
+  ros__parameters:
+    goal_x: 1.0
+    goal_y: 2.0
+</code></pre>
+<p>終点Bは走行中・ERRORからの復帰時とも維持する。パラメーターは起動時固定。COMPLETE後の再走行は設定変更後にノードを再起動する。</p>
+<h2 id="section-3">3. 採用パラメーター</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>項目</th>
+<th>パラメーター名案</th>
+<th>初期値</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>制御周期</td>
+<td><code>control_rate_hz</code></td>
+<td>20 Hz（50 ms周期）</td>
+</tr>
+<tr>
+<td>通常の経路方向速度</td>
+<td><code>path_speed_m_s</code></td>
+<td>0.3 m/s。通過後は−0.3 m/s</td>
+</tr>
+<tr>
+<td>並進速度の下限</td>
+<td><code>min_linear_speed_m_s</code></td>
+<td>0.05 m/s。移動中のみ</td>
+</tr>
+<tr>
+<td>並進速度の上限</td>
+<td><code>max_linear_speed_m_s</code></td>
+<td>0.5 m/s</td>
+</tr>
+<tr>
+<td>横ずれ補正ゲイン</td>
+<td><code>cross_track_gain</code></td>
+<td>1.0 [1/s]</td>
+</tr>
+<tr>
+<td>角度補正ゲイン</td>
+<td><code>heading_gain</code></td>
+<td>1.0 [1/s]</td>
+</tr>
+<tr>
+<td>回転速度上限</td>
+<td><code>max_angular_speed_rad_s</code></td>
+<td>0.3 rad/s（±0.3に制限）</td>
+</tr>
+<tr>
+<td>初期化タイムアウト</td>
+<td><code>init_timeout_sec</code></td>
+<td>10.0秒</td>
+</tr>
+<tr>
+<td>位置の更新停止判定</td>
+<td><code>position_timeout_sec</code></td>
+<td>0.6秒</td>
+</tr>
+<tr>
+<td>姿勢の更新停止判定</td>
+<td><code>heading_timeout_sec</code></td>
+<td>0.6秒</td>
+</tr>
+<tr>
+<td>始点の平均サンプル数</td>
+<td><code>init_sample_count</code></td>
+<td>10個</td>
+</tr>
+<tr>
+<td>到着許容距離</td>
+<td><code>goal_tolerance_m</code></td>
+<td>0.10 m</td>
+</tr>
+<tr>
+<td>到着確認時間</td>
+<td><code>goal_hold_sec</code></td>
+<td>2.0秒</td>
+</tr>
+</tbody>
+</table></div>
+<p>上記の名称で実装。終点近傍での減速、加速度制限、Path Control独自の車輪RPM制限は設けない。下位の <code>locomotion_core_rpm</code> による車輪RPM上限制限は引き続き適用される。</p>
+<h2 id="section-4">4. 始点Aの初期化</h2>
+<p>INITに入った時点から10秒を計測する。車体は停止指令を維持し、新規の有効な車体中心位置をN個取得する。</p>
+<pre><code class="language-text">A.x = Σ x_i / N
+A.y = Σ y_i / N
+N = 10（変更可能）
+</code></pre>
+<p>UWBの有効更新は5 Hz。別々の新規サンプルだけを数え、20 Hzの制御周期で同じ位置を重複計上しない。10個の取得は初回から最短約1.8秒。無効サンプルは平均に含めない。</p>
+<p>10秒以内に揃わなければERRORへ移行する。取得後のAは走行中固定する。Bから0.10 m以内なら経路単位ベクトルを計算せずGOAL_CHECKへ進む。それ以外はA→Bの経路を作成してDRIVEへ進む。ERRORから復帰した場合はAと収集中サンプルを破棄し、再取得する。Bは維持する。</p>
+<h2 id="section-5">5. 経路追従の制御式</h2>
+<h3>5.1 経路方向への移動</h3>
+<pre><code class="language-text">L = sqrt((B.x − A.x)^2 + (B.y − A.y)^2)
+t = (B − A) / L = (t_x, t_y)
+n = (−t_y, t_x)
+d_remaining = (B − P) · t
+
+許容範囲外かつ d_remaining ≥ 0：v_forward = +0.3 m/s
+許容範囲外かつ d_remaining &lt; 0：v_forward = −0.3 m/s
+v_path = v_forward · t
+</code></pre>
+<p>tは経路の進行方向、nは経路の左向き単位ベクトル。終点通過後は同じ経路に沿って戻り、車体の目標方向はA→Bのままとする。</p>
+<h3>5.2 横ずれ補正</h3>
+<pre><code class="language-text">e_CT = (P − A) · n
+v_CT = −K_CT · e_CT · n
+v_world = v_path + v_CT
+K_CT = 1.0 [1/s]
+</code></pre>
+<p>経路左側のずれを正とする。正なら右向き、負なら左向きに補正する。</p>
+<h3>5.3 並進速度制限と車体座標変換</h3>
+<pre><code class="language-text">s = norm(v_world)
+移動中かつ s &gt; 0：
+    v_world = v_world · clamp(s, 0.05, 0.5) / s
+s = 0 の場合：v_world = (0, 0)
+
+linear.x =  cos(theta) · v_world.x + sin(theta) · v_world.y
+linear.y = −sin(theta) · v_world.x + cos(theta) · v_world.y
+</code></pre>
+<p>合成速度の方向を維持して大きさを制限する。停止状態では最低速度を適用しない。回転変換で速度の大きさは変わらない。</p>
+<h3>5.4 車体方向の補正</h3>
+<pre><code class="language-text">theta_AB = atan2(B.y − A.y, B.x − A.x)
+e_theta = atan2(sin(theta_AB − theta), cos(theta_AB − theta))
+angular.z = clamp(K_theta · e_theta, −0.3, +0.3)
+K_theta = 1.0 [1/s]
+</code></pre>
+<p>短い方向に回転する。横ずれ補正中も車体方向はA→Bのままとし、移動方向だけが斜めになる。</p>
+<h2 id="section-6">6. 到着判定</h2>
+<pre><code class="language-text">d_goal = norm(B − P)
+d_goal ≤ 0.10 m → GOAL_CHECK（並進・回転ともゼロ）
+</code></pre>
+<p>新規有効位置で範囲内が2秒以上継続したことを確認してCOMPLETEへ進む。同じ位置を保持したまま壁時計で2秒経過しても完了にしない。新規位置の時刻で継続時間を評価し、入力の鮮度も満たす必要がある。</p>
+<p>範囲外なら確認時間をリセットしDRIVEへ戻る。異常ならリセットしERRORへ移行する。COMPLETE後は停止を維持する。停止は速度指令ゼロを意味し、実際の車輪停止を確認する機能は現構成にない。</p>
+<h2 id="section-7">7. 入力異常と復帰</h2>
+<p>位置または姿勢が0.6秒以上更新されなければERRORへ移行し、ゼロ指令と異常通知を維持する。INITの未受信待機は10秒の初期化制限を適用する。</p>
+<p>異常発生後の新しい有効データで位置・姿勢の両方が正常であることを確認したら解除を通知し、必ずINITへ戻る。過去のA、平均サンプル、到着確認時間を破棄し、Bは維持する。</p>
+<p>統合Poseにはvalidフラグがなく、上流は無効入力や同期失敗時にPoseを配信しない。統合Poseのみを購読する場合、位置・姿勢の更新停止は共通のPose更新停止として検出する。原因を区別するには元の <code>/uwb/position</code> と <code>/zed/heading</code> の監視または上流の状態通知が必要。</p>
+<p>非有限値、不正Quaternion（ノルム誤差0.01超）、frame_id不一致、重複・逆順・未来stampをERRORとする。受信停止とheader.stampの古さをともに判定し、ROS時刻の逆行時も停止して再初期化する。異常入力を初期化・到着確認の有効サンプルに含めない。</p>
+<h2 id="section-8">8. 状態遷移</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>状態</th>
+<th>出力・処理</th>
+<th>遷移</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>INIT</td>
+<td>ゼロ指令、新規位置10個を平均</td>
+<td>取得完了→DRIVEまたはGOAL_CHECK。10秒超過・入力異常→ERROR</td>
+</tr>
+<tr>
+<td>DRIVE</td>
+<td>経路速度・横ずれ・角度補正、速度制限</td>
+<td>到着範囲内→GOAL_CHECK。入力異常→ERROR</td>
+</tr>
+<tr>
+<td>GOAL_CHECK</td>
+<td>ゼロ指令、新規位置で2秒継続を確認</td>
+<td>継続成立→COMPLETE。範囲外→DRIVE。入力異常→ERROR</td>
+</tr>
+<tr>
+<td>ERROR</td>
+<td>ゼロ指令、異常通知、確認時間を破棄</td>
+<td>新規の正常位置・姿勢を確認→INIT</td>
+</tr>
+<tr>
+<td>COMPLETE</td>
+<td>ゼロ指令を維持</td>
+<td>再走行にはノード再起動</td>
+</tr>
+</tbody>
+</table></div>
+<p>処理順は異常判定・停止条件を速度生成より優先する。INIT・DRIVE・GOAL_CHECKの入力異常時は到着判定よりERRORを優先する。COMPLETEは入力状態にかかわらずゼロ指令を維持する。</p>
+<h2 id="section-9">9. 更新周期・遅延と下位系</h2>
+<p>制御演算とTwist配信は20 Hz、位置情報は実効5 Hz。新規入力の間は最後の有効値を保持するが、更新停止判定を継続する。更新レートを上げても位置計測そのものは増えない。</p>
+<p>既存UWB位置推定は5点移動平均を使用する。5 Hzでは定常的な遅れが約0.4秒あり、0.3 m/s走行時に約0.12 mに相当する。平均位置には最新入力の時刻が付くため、この遅れは単純なstamp鮮度判定で検出できない。現在の方位との組み合わせによる時間的なずれも実機で評価する。</p>
+<p><code>uwb_robot_pose_publisher</code> の既存入力タイムアウト0.5秒、方位時刻差上限0.1秒、方位待機上限0.1秒は変更していない。Path Controlの0.6秒はその出力を監視する別の制限であり、センサー異常から車輪停止までの総時間を意味しない。</p>
+<p>下位系ではTwist入力が0.5秒途絶えるとゼロRPMを配信する。RPM入力が0.5秒途絶えるとドライバが停止し、新しい有効なRPMで再開する。通信異常はラッチし、原因解消後のドライバ再起動を要する。</p>
+<h2 id="section-10">10. 未決定事項</h2>
+<ul>
+<li>UWB軸とZED方位の整合、校正時の基準方向、π/2補正の実機確認。</li>
+<li>5点移動平均の遅延に対する扱い。到着判定のヒステリシス等は実機評価後に検討する。</li>
+<li>実停止の確認方法、LiDARによる停止・回避との優先順位。</li>
+</ul>
+<h2 id="section-11">11. 検証計画</h2>
+<ol>
+<li>座標変換、横ずれ符号、角度折り返し、並進・回転の上限制限を単体検証する。</li>
+<li>新規位置のみを数える初期化、10秒タイムアウト、ERROR復帰時のA再取得を検証する。</li>
+<li>終点手前・通過後の速度符号、到着中の離脱、欠測時に完了しないことを検証する。</li>
+<li>入力停止・無効値でゼロ出力になり、古いサンプルで復帰しないことを検証する。</li>
+<li>実機で方位基準と左右・回転符号を確認し、低速で各制御成分を個別評価する。</li>
+<li>合成走行で位置、姿勢、e_CT、e_theta、速度指令、状態、入力時刻を記録し、停止距離と到着確認を評価する。</li>
+</ol>
+<p>元資料はユーザー提供の <code>path_control_spec.html</code>（ドラフトv1.0）。本書は設計の整理であり、ノードや実機動作を実装・検証したことを示すものではない。</p>
+<h2 id="section-12">12. 実装時の確定事項</h2>
+<ul>
+<li>統合Poseのみ購読し、元センサーの異常原因の分類は行わない。新しい正常Poseの受信でERRORを解除し、そのサンプルからINITの平均を再取得する。</li>
+<li>状態通知はJSON文字列。state、reason、error、init_samples、start、goalを20 Hzで配信する。reasonはpose_timeout、init_timeout、nonfinite_pose、pose_timestamp、duplicate_or_reversed_stamp、frame_mismatch、invalid_quaternion、clock_backwards、degenerate_path。解除時は空文字列。</li>
+<li>非ゼロの速度指令は20 Hz。停止状態への入力遷移時はゼロ指令を即時追加配信する。</li>
+<li>終点パラメーターの初期値は未設定扱いとし、YAMLにgoal_x・goal_y両方が必要。全パラメーターをread-onlyとする。</li>
+<li>経路長が1e-9 m未満なのに移動が必要になった場合はdegenerate_pathで停止する。</li>
+<li>ノード正常終了時はゼロ指令を送信する。終了時の配信到達は保証できないため、下位のタイムアウトも継続する。</li>
+</ul>
+<footer>原本：<a href="path_control_parameters_ja.md">Markdown仕様書</a></footer></main></body></html>

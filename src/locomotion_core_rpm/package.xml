@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>locomotion_core_rpm</name>
+  <version>0.1.0</version>
+  <description>Twist to motor RPM and Roboteq serial speed commands</description>
+  <maintainer email="keisuke-kawanishi@users.noreply.github.com">keisuke-kawanishi</maintainer>
+  <license>TODO: License declaration</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>python3-serial</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <test_depend>python3-pytest</test_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

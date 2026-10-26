@@ -1,0 +1,15 @@
+uwb_robot_pose_publisher:
+  ros__parameters:
+    uwb_position_topic: /uwb/position
+    zed_heading_topic: /zed/heading
+    robot_pose_topic: /uwb/robot_pose
+    world_frame_id: world
+    # Robot-fixed offset from center to tag: forward and left positive [m].
+    tag_offset_forward_m: 0.335
+    tag_offset_left_m: -0.010
+    # Provisional timing limits; validate against actual sensor delays.
+    position_timeout_sec: 0.5
+    heading_timeout_sec: 0.5
+    max_heading_time_diff_sec: 0.1
+    heading_wait_timeout_sec: 0.1
+    heading_buffer_duration_sec: 1.0

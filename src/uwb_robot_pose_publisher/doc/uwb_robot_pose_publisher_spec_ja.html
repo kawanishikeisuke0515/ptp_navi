@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>UWB Robot Pose Publisher 仕様書</title><style>
+:root { color-scheme: light; }
+* { box-sizing: border-box; }
+body { margin: 0; color: #202833; background: #f5f7fa; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Yu Gothic", "Noto Sans JP", sans-serif; line-height: 1.8; }
+main { max-width: 1100px; margin: 32px auto; padding: 40px 48px; background: white; border: 1px solid #d8e0ea; border-radius: 12px; }
+a { color: #155e75; text-underline-offset: 3px; }
+h1 { font-size: 1.9rem; line-height: 1.4; }
+h2 { margin-top: 2.6rem; padding-bottom: .4rem; border-bottom: 2px solid #d8e0ea; font-size: 1.4rem; }
+h3 { margin-top: 1.8rem; font-size: 1.15rem; }
+nav { background: #f0f7fa; border-radius: 8px; padding: 16px 24px; }
+nav ol { margin: 8px 0; padding-left: 24px; }
+code { background: #edf1f6; padding: .12em .3em; border-radius: 4px; font-family: Consolas, "Liberation Mono", monospace; overflow-wrap: anywhere; }
+pre { overflow-x: auto; padding: 18px; background: #17202a; color: #edf5ff; border-radius: 8px; line-height: 1.6; }
+pre code { background: transparent; padding: 0; overflow-wrap: normal; }
+.table-scroll { overflow-x: auto; margin: 1rem 0; }
+table { width: 100%; border-collapse: collapse; font-size: .94rem; }
+th, td { border: 1px solid #d8e0ea; padding: 10px 12px; text-align: left; vertical-align: top; }
+th { background: #eaf2f7; }
+tr:nth-child(even) td { background: #f8fafc; }
+.source { color: #647084; font-size: .9rem; }
+@media (max-width: 700px) { main { margin: 0; padding: 22px 16px; border: 0; border-radius: 0; } h1 { font-size: 1.5rem; } }
+@media print { body { background: white; } main { max-width: none; margin: 0; padding: 0; border: 0; } nav, .source { display: none; } pre { white-space: pre-wrap; color: black; background: #f3f3f3; } .table-scroll { overflow: visible; } h2, h3 { break-after: avoid; } tr { break-inside: avoid; } }
+</style></head><body><main><h1>UWB Robot Pose Publisher 仕様書</h1>
+<p>Version: 0.1 draft<br />
+Date: 2026-09-16<br />
+Status: 初期実装済み。時刻閾値・校正・実機精度は評価待ち。</p>
+<nav aria-label="目次"><ol><li><a href="#section-1">1. 目的と合意事項</a></li><li><a href="#section-2">2. 責務と配置</a></li><li><a href="#section-3">3. 座標系と補正式</a></li><li><a href="#section-4">4. 入出力</a></li><li><a href="#section-5">5. 時刻対応とpublish条件（設計案）</a></li><li><a href="#section-6">6. パラメータ案</a></li><li><a href="#section-7">7. 異常時と下流への契約</a></li><li><a href="#section-8">8. 検証と既存システムへの接続</a></li><li><a href="#section-9">9. 実機接続・評価時に確認する事項</a></li><li><a href="#section-10">10. 参照した現行実装</a></li><li><a href="#section-11">11. ビルドと起動</a></li></ol></nav><h2 id="section-1">1. 目的と合意事項</h2>
+<p>UWBタグのWorld位置とロボットのyawから、ロボット中心のWorld位置・姿勢を算出する。
+車体を上から見た幾何学的中心と旋回中心は一致しており、この点をロボット位置の基準とする。</p>
+<p>合意済みの取り付け位置は、中心から前方に33.5 cm、右に1 cmである。
+設定は機体に固定された値とし、ロボットが旋回しても変更しない。</p>
+<p>本書のインターフェース、同期方式に沿って初期実装を行った。第9節の項目は実機接続・評価時に確認する。</p>
+<h2 id="section-2">2. 責務と配置</h2>
+<p>独立したROS 2 Pythonパッケージ <code>uwb_robot_pose_publisher</code> として配置し、ノード名も同名とする。</p>
+<pre><code class="language-text">src/uwb_robot_pose_publisher/
+├── doc/uwb_robot_pose_publisher_spec_ja.md
+├── uwb_robot_pose_publisher/    # 中心補正の計算とROSノード
+├── config/                    # パラメータYAML
+├── launch/                    # launchファイル
+└── test/                      # 検証
+</code></pre>
+<p><code>uwb_position_publisher</code> は引き続き距離からタグ位置を算出する。本ノードは中心への幾何学的補正を担当し、Visionとの切り替え・融合、速度指令生成、追加の位置平滑化は担当しない。</p>
+<pre><code class="language-text">/uwb/position ──┐
+               ├─ uwb_robot_pose_publisher ─ /uwb/robot_pose
+/zed/heading ───┘
+</code></pre>
+<p>将来はUWB由来の姿勢とVision由来の姿勢を後段の自己位置推定ノードへ渡し、その出力を <code>/robot/pose</code> とする構成を想定する。</p>
+<h2 id="section-3">3. 座標系と補正式</h2>
+<h3>3.1 定義</h3>
+<ul>
+<li>WorldのX・YはUWBアンカー座標と同じ平面座標系とする。Zは上向きとする。</li>
+<li>ロボット座標は中心を原点とし、xは前方、yは左方、zは上方とする。</li>
+<li>取り付け位置を <code>f = tag_offset_forward_m</code>、<code>l = tag_offset_left_m</code> とする。</li>
+<li>入力yawを <code>θ = robot_yaw_rad</code> とする。既存制御の前方軸の式に合わせ、θ=0で前方はWorldの+Y、θが増えると+Yから−X方向に旋回する。</li>
+<li>出力のWorld yawを <code>ψ = wrap_pi(θ + π/2)</code> とする。Worldの+Xをゼロ、+Z軸まわりの反時計回りを正とする。</li>
+</ul>
+<p>この対応には、headingのゼロ方向がアンカーWorldの+Yに校正されていることが必要である。磁気方位を受信するだけではWorldへの整合は保証されない。</p>
+<h3>3.2 計算</h3>
+<pre><code class="language-text">offset_world_x = cos(ψ) * f - sin(ψ) * l
+offset_world_y = sin(ψ) * f + cos(ψ) * l
+
+center_x = tag_x - offset_world_x
+center_y = tag_y - offset_world_y
+</code></pre>
+<p>取り付け設定は <code>f=0.335</code>、<code>l=-0.010</code> [m] とする。
+θ=0ではタグは中心からWorldの(+0.010, +0.335) [m]にあり、中心はタグから(−0.010, −0.335) [m]となる。</p>
+<p>平面移動を対象とし、roll・pitchによるオフセット回転は扱わない。タグとアンカーの高低差による距離補正は既存の <code>uwb_position_publisher</code> の責務とし、引き続きタグの高さを用いる。</p>
+<p>既存制御の <code>error_body_y</code> の式は、θ=0でWorldの+Xを正としている。本書の「左が正」とは異なるため、制御接続時には横方向の符号を確認する。本ノードでは既存の横方向指令の符号を流用しない。</p>
+<h2 id="section-4">4. 入出力</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>方向</th>
+<th>Topic（既定案）</th>
+<th>型</th>
+<th>使用内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Subscribe</td>
+<td><code>/uwb/position</code></td>
+<td><code>uwb_interfaces/msg/UwbPosition</code></td>
+<td><code>header.stamp</code>, <code>x_m</code>, <code>y_m</code>, <code>valid</code></td>
+</tr>
+<tr>
+<td>Subscribe</td>
+<td><code>/zed/heading</code></td>
+<td><code>zed_interfaces/msg/ZedHeading</code></td>
+<td><code>header.stamp</code>, <code>robot_yaw_rad</code>, <code>valid</code></td>
+</tr>
+<tr>
+<td>Publish</td>
+<td><code>/uwb/robot_pose</code></td>
+<td><code>geometry_msgs/msg/PoseStamped</code></td>
+<td>中心のWorld位置・姿勢</td>
+</tr>
+</tbody>
+</table></div>
+<p>出力の規則は以下とする。</p>
+<ul>
+<li><code>header.stamp</code> は対応するUWB入力のstampとし、publish時刻への置き換えは行わない。</li>
+<li><code>header.frame_id</code> は <code>world_frame_id</code> とする。</li>
+<li><code>position.x/y</code> に中心座標、<code>position.z</code> に平面モデル上の <code>0.0</code> を設定する。zは高さの測定値ではない。</li>
+<li>Quaternionは <code>(x,y,z,w)=(0,0,sin(ψ/2),cos(ψ/2))</code> とする。</li>
+<li>このメッセージには <code>child_frame_id</code> がないため、姿勢の対象は本書で定義するロボット中心座標系とする。</li>
+<li>初期実装ではTFをpublishしない。</li>
+</ul>
+<p>既存のUWB位置は距離メッセージのheaderを継承し、frame名は既定で <code>uwb</code> となる。headingのframe名は既定で <code>zed2i_mag</code> である。これらの文字列はWorldとの整合を保証しない。本ノードでframe名を設定する前提として、アンカー座標とheadingの基準方向が同一Worldに整合していることを確認する。</p>
+<h2 id="section-5">5. 時刻対応とpublish条件（設計案）</h2>
+<p>UWB入力ごとに最大1件の姿勢を生成する。headingだけが更新されても、古いUWB位置を再利用した新規姿勢はpublishしない。</p>
+<ol>
+<li>有効かつ有限値のheadingをstamp順の短時間バッファに保持する。</li>
+<li>UWB入力時、そのstampを挟む2件のheadingがあれば、最短角度差を用いてyawを線形補間する。完全に同じstampのheadingがあればその値を使う。</li>
+<li>補間に用いる両端のstampは、それぞれUWBのstampとの差が <code>max_heading_time_diff_sec</code> 以下でなければならない。</li>
+<li>対応するheadingがまだなければ、UWBを最大 <code>heading_wait_timeout_sec</code> 保留する。期限までに対応が得られなければ破棄し、外挿や無条件の最新yawへの置き換えはしない。</li>
+<li>入力の古さはROS時刻とstampの差で判定する。保留中も鮮度条件を適用する。無効値、非有限値、期限切れの場合は姿勢をpublishしない。</li>
+<li>同一入力系列の重複・逆順stampは破棄する。ROS時刻が後退した場合はバッファと保留入力を破棄して再初期化する。未来stampは初期案では不正入力として破棄する。</li>
+</ol>
+<p>入力が <code>valid=false</code> になった場合、その系列の履歴と保留UWBをクリアし、無効区間をまたぐ補間を防ぐ。復帰後は新しい有効データで再開する。</p>
+<p>現在のheadingノードはメッセージ生成時のROS時刻を付けており、センサ観測時刻をそのまま使っていない。UWB位置も受信側で付けたstampを継承し、さらに移動平均後の位置に最新入力のstampを付けている。そのため、上記はheader時刻の対応であり、真の観測時刻同期を保証しない。</p>
+<p>特に旋回中は、平滑化されたタグ位置とyawの遅延差によって中心が揺れる可能性がある。初期の幾何学検証では上流の <code>moving_average_window=1</code> を使用し、実運用の平滑化・時刻改善は別途評価する。<code>device_time_ms</code> はROS時刻への対応が未定義のため、本ノードの同期に直接使用しない。</p>
+<h2 id="section-6">6. パラメータ案</h2>
+<p>設定は起動時にYAMLから読み込み、実行中の動的変更は初期実装の対象外とする。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>設定値／既定案</th>
+<th>条件・意味</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uwb_position_topic</code></td>
+<td><code>/uwb/position</code></td>
+<td>空文字不可</td>
+</tr>
+<tr>
+<td><code>zed_heading_topic</code></td>
+<td><code>/zed/heading</code></td>
+<td>空文字不可</td>
+</tr>
+<tr>
+<td><code>robot_pose_topic</code></td>
+<td><code>/uwb/robot_pose</code></td>
+<td>空文字不可</td>
+</tr>
+<tr>
+<td><code>world_frame_id</code></td>
+<td><code>world</code></td>
+<td>空文字不可、アンカー座標系と一致させる</td>
+</tr>
+<tr>
+<td><code>tag_offset_forward_m</code></td>
+<td><code>0.335</code></td>
+<td>有限値、前が正</td>
+</tr>
+<tr>
+<td><code>tag_offset_left_m</code></td>
+<td><code>-0.010</code></td>
+<td>有限値、左が正</td>
+</tr>
+<tr>
+<td><code>position_timeout_sec</code></td>
+<td><code>0.5</code>（暫定）</td>
+<td>正の有限値</td>
+</tr>
+<tr>
+<td><code>heading_timeout_sec</code></td>
+<td><code>0.5</code>（暫定）</td>
+<td>正の有限値</td>
+</tr>
+<tr>
+<td><code>max_heading_time_diff_sec</code></td>
+<td><code>0.1</code>（暫定）</td>
+<td>正の有限値、補間両端の許容時刻差</td>
+</tr>
+<tr>
+<td><code>heading_wait_timeout_sec</code></td>
+<td><code>0.1</code>（暫定）</td>
+<td>正の有限値、heading到着の待機上限</td>
+</tr>
+<tr>
+<td><code>heading_buffer_duration_sec</code></td>
+<td><code>1.0</code>（暫定）</td>
+<td>正の有限値、時刻対応に必要な履歴を保持する</td>
+</tr>
+</tbody>
+</table></div>
+<p>取り付け値以外の数値は実機測定で見直す。バッファ期間は少なくとも <code>position_timeout_sec + max_heading_time_diff_sec</code> を満たすように検証する。heading履歴と保留UWBはそれぞれ最大1024件とし、超過時は最古の要素を破棄して警告する。期限切れデータはタイマーで継続的に除去する。新しい姿勢を出力できた場合、それより古い未対応UWBは破棄し、出力stampの逆行を防ぐ。</p>
+<h2 id="section-7">7. 異常時と下流への契約</h2>
+<p>不正なパラメータは起動エラーとする。入力不足、invalid、非有限値、時刻不整合、期限切れでは出力を停止し、理由を頻度制限付きログへ出す。過去の正常姿勢を新しいstampで再送しない。</p>
+<p><code>PoseStamped</code> にはvalidフラグがないため、下流は出力のstampによるtimeoutを必須とする。本ノードの無出力だけで即時の異常通知はできない。即時通知が必要なら別途状態topicを検討する。</p>
+<h2 id="section-8">8. 検証と既存システムへの接続</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>検証</th>
+<th>期待結果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>オフセットゼロ</td>
+<td>中心位置とタグ位置が一致する</td>
+</tr>
+<tr>
+<td>θ=0、タグ位置(1, 2) m</td>
+<td>中心位置(0.990, 1.665) m、出力yaw=π/2</td>
+</tr>
+<tr>
+<td>θ=π/2、タグ位置(1, 2) m</td>
+<td>中心位置(1.335, 1.990) m、出力yawは±π相当</td>
+</tr>
+<tr>
+<td>中心固定でタグを理想的に一周させる</td>
+<td>全yawで補正後中心が一定となる</td>
+</tr>
+<tr>
+<td>yawが+πと−πをまたぐ補間</td>
+<td>ゼロ方向へ大回りせず最短角度で補間する</td>
+</tr>
+<tr>
+<td>無効入力・古い入力・同期不可</td>
+<td>正常姿勢をpublishしない</td>
+</tr>
+<tr>
+<td>headingのみ継続、UWB停止</td>
+<td>古い位置から新規姿勢を生成しない</td>
+</tr>
+<tr>
+<td>実機のその場旋回</td>
+<td>タグ軌跡と中心軌跡を比較し、残差をUWB・yaw・時刻の誤差とともに評価する</td>
+</tr>
+</tbody>
+</table></div>
+<p>実機の中心揺れの許容値は、現時点では未確定とする。</p>
+<p><code>uwb_position_zed_pose_ctrl</code> は <code>/uwb/robot_pose</code> を購読し、中心位置を用いて制御する。入力QuaternionのWorld yawからπ/2を引き、既存の制御・目標yaw基準（0でWorldの+Y）に合わせる。frame・Quaternion・stampを検証し、姿勢が古い場合は停止する。</p>
+<p><code>uwb_zed_docking.launch.py</code> と <code>managed_docking.launch.py</code> は本ノードを起動する。全体の <code>docking.launch.py</code> はmanaged launch経由で1つ起動する。</p>
+<h2 id="section-9">9. 実機接続・評価時に確認する事項</h2>
+<ol>
+<li>Worldの+Yとheadingのゼロ方向を合わせる校正手順、横方向の実機符号。</li>
+<li>header時刻の補間方式と暫定閾値の妥当性。観測時刻の改善を初期実装に含めるか。</li>
+<li>上流の移動平均による遅延の扱いと、実機評価時のフィルタ設定。</li>
+<li>中心揺れの合格基準。</li>
+<li>接続済み制御での実機動作と、必要なら状態topicの追加。</li>
+</ol>
+<h2 id="section-10">10. 参照した現行実装</h2>
+<ul>
+<li><a href="../../uwb_position_publisher/uwb_position_publisher/uwb_position_publisher.py">UWB位置算出</a></li>
+<li><a href="../../uwb_position_publisher/uwb_position_publisher/uwb_distance_publisher.py">UWB距離入力</a></li>
+<li><a href="../../zed_heading_publisher/zed_heading_publisher/zed_heading_publisher.py">ZED heading算出</a></li>
+<li><a href="../../uwb_position_zed_pose_ctrl/uwb_position_zed_pose_ctrl/pose_control.py">既存位置制御の座標変換</a></li>
+</ul>
+<h2 id="section-11">11. ビルドと起動</h2>
+<p>ワークスペース <code>ptp_navi</code> で実行する。</p>
+<pre><code class="language-bash">source /opt/ros/jazzy/setup.bash
+colcon build --packages-up-to uwb_robot_pose_publisher
+source install/setup.bash
+ros2 launch uwb_robot_pose_publisher uwb_robot_pose_publisher.launch.py
+</code></pre>
+<p>このlaunchは中心補正ノードのみを起動する。UWB位置・ZED headingの入力ノードは別途起動する。独自YAMLを使う場合は <code>config_file:=/absolute/path/config.yaml</code> を指定する。</p>
+<pre><code class="language-bash">ros2 topic echo /uwb/robot_pose
+colcon test --packages-select uwb_robot_pose_publisher
+colcon test-result --verbose
+</code></pre>
+<p>起動時パラメータはread-onlyとして宣言し、実行中の変更を拒否する。出力は <code>PoseStamped</code> で、共分散は含まない。</p>
+</main></body></html>

@@ -1,0 +1,7 @@
+uwb_position_logger:
+  ros__parameters:
+    output_dir: "/tmp/uwb_position_logs"
+    uwb_position_topic: "/uwb/position"
+    uwb_distances_topic: "/uwb/distances"
+    optitrack_pose_topic: "/vrpn_mocap/RigidBody_1/pose"
+    flush_every_rows: 20

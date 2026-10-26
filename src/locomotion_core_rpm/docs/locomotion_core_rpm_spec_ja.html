@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>locomotion_core_rpm 仕様書</title><style>body{font-family:system-ui,"Noto Sans JP",sans-serif;color:#233044;background:#f3f6fa;margin:0;line-height:1.85}main{max-width:1050px;margin:32px auto;background:white;padding:40px;border-radius:12px}h1{font-size:1.9rem}h2{margin-top:2.2em;border-bottom:2px solid #dde7f2;padding-bottom:.35em}h3{margin-top:1.6em}table{border-collapse:collapse;width:100%;display:block;overflow-x:auto;margin:1.2em 0;font-size:.94rem}th,td{border:1px solid #d6dfe9;padding:10px 14px;text-align:left;vertical-align:top}th{background:#edf3fa}pre{background:#14283e;color:#edf5ff;padding:20px;overflow:auto;border-radius:8px;line-height:1.65}a{color:#145ea8}nav{padding:14px 20px;background:#edf3fa;border-radius:8px}nav a{display:inline-block;margin-right:18px}code{font-family:monospace}@media(max-width:700px){main{margin:0;padding:20px;border-radius:0}h1{font-size:1.5rem}}@media print{body{background:white}main{margin:0;padding:0;max-width:none}pre{white-space:pre-wrap;background:#eee;color:black}nav{display:none}h2,h3{break-after:avoid}tr{break-inside:avoid}}</style></head><body><main><nav>初期実装・実機未検証 ｜ <a href="locomotion_core_rpm_spec_ja.md">Markdown版</a></nav><h1>locomotion_core_rpm 仕様書</h1>
+<p>更新日：2026-10-02 ／ 状態：初期実装・実機未検証</p>
+<h2>1. 目的と範囲</h2>
+<p>既存の locomotion_core と同じ基本構成を持つ独立した ROS 2 パッケージ locomotion_core_rpm を作る。車体速度 Twist を各輪のモーター軸 RPM に変換し、Roboteq の !S コマンドで送信する。既存パッケージは変更しない。</p>
+<p>本書は初期実装の仕様を示す。既存の運動学行列を採用し、減速比は設定可能で初期値を全輪1.0とする。実機の車輪配置、回転方向、速度フィードバック設定は実機試験で照合する。</p>
+<p>モーター速度の閉ループ制御は Roboteq に任せる。ZED などを使った車体速度のフィードバック制御、軌道追従、学習処理、metrics_logger の移植は初期版の範囲外とする。</p>
+<h2>2. 基本構成</h2>
+<pre><code class="language-text">/rov_cmd_vel [geometry_msgs/msg/Twist]
+    ↓
+rover_velocity.py
+    └─ RoverDescription.py / RobotDefinition.py
+    ↓
+/rov/motor_rpm [std_msgs/msg/Float32MultiArray]
+    ↓
+    ↓ シリアル通信：!S &lt;CH&gt; &lt;RPM&gt;_
+Roboteq × 2台（Closed Loop Speed）
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>ファイル・ディレクトリ</th>
+<th>役割</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>locomotion_core_rpm/RobotDefinition.py</td>
+<td>機体の基本定義と運動学インターフェース</td>
+</tr>
+<tr>
+<td>locomotion_core_rpm/RoverDescription.py</td>
+<td>車体速度から各輪RPMへの変換</td>
+</tr>
+<tr>
+<td>locomotion_core_rpm/rover_velocity.py</td>
+<td>Twist購読、変換、RPM発行、入力タイムアウト監視</td>
+</tr>
+<tr>
+<td>locomotion_core_rpm/cmd_roboteq.py</td>
+<td>RPM購読、制限検証、シリアル送信</td>
+</tr>
+<tr>
+<td>config/locomotion_core_rpm.yaml</td>
+<td>寸法、減速比、配線、制限、通信設定</td>
+</tr>
+<tr>
+<td>launch/wheel_control.launch.py</td>
+<td>変換ノードとドライバーの起動</td>
+</tr>
+<tr>
+<td>launch/rpm_driver.launch.py</td>
+<td>RPM直接入力試験用にドライバーだけ起動</td>
+</tr>
+<tr>
+<td>docs/</td>
+<td>本仕様書のMarkdown版・HTML版</td>
+</tr>
+</tbody>
+</table>
+<p>ファイル名と役割は既存構成に合わせる。ノード名は rover_velocity_rpm、cmd_roboteq_rpm。パッケージ登録、依存関係、launch・設定・ドキュメントのインストール設定を含む。検証・タイムアウト・シリアル通信は control.py に分離し、ROSと実機なしでも単体検証できる構成とする。</p>
+<h2>3. ROSインターフェース</h2>
+<table>
+<thead>
+<tr>
+<th>トピック（既定案）</th>
+<th>型</th>
+<th>仕様</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>/rov_cmd_vel</td>
+<td>geometry_msgs/msg/Twist</td>
+<td>linear.x、linear.y、angular.z を使用</td>
+</tr>
+<tr>
+<td>/rov/motor_rpm</td>
+<td>std_msgs/msg/Float32MultiArray</td>
+<td>data は4要素。各要素はモーター軸RPM</td>
+</tr>
+</tbody>
+</table>
+<p>トピック名はパラメータまたはリマップで変更可能とする。Twist は車体座標で、+x は前、+y は左、+z の回転は反時計回り。並進は m/s、角速度は rad/s。他の成分は使用しない。</p>
+<p>RPM配列の順序は既存のコントローラ接続順を踏襲する。</p>
+<table>
+<thead>
+<tr>
+<th>配列添字</th>
+<th>接続先</th>
+<th>チャンネル</th>
+<th>物理的な車輪位置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>front_port</td>
+<td>1</td>
+<td>実機で確認</td>
+</tr>
+<tr>
+<td>1</td>
+<td>front_port</td>
+<td>2</td>
+<td>実機で確認</td>
+</tr>
+<tr>
+<td>2</td>
+<td>back_port</td>
+<td>1</td>
+<td>実機で確認</td>
+</tr>
+<tr>
+<td>3</td>
+<td>back_port</td>
+<td>2</td>
+<td>実機で確認</td>
+</tr>
+</tbody>
+</table>
+<p>RPMトピックの値は配線方向を補正する前の運動学上の符号とする。ドライバーで各輪の方向係数を一度だけ掛ける。指令RPMは実測RPMではない。実測値の取得・発行は別途検討する。</p>
+<h2>4. 速度変換</h2>
+<p>既存の運動学行列を候補として引き継ぎ、実機の車輪形式・ローラー配置・車輪順に適合するか確認してから確定する。4輪メカナムであることは現時点で未確認。</p>
+<pre><code class="language-text">vx = linear.x [m/s]
+vy = linear.y [m/s]
+wz = angular.z [rad/s]
+r  = 車輪半径 [m]
+L  = lx + ly [m]
+
+候補式（既存の行順を踏襲）：
+ω0 = (vx + vy + L × wz) / r
+ω1 = (vx - vy - L × wz) / r
+ω2 = (vx - vy + L × wz) / r
+ω3 = (vx + vy - L × wz) / r
+
+車輪RPM_i     = ωi × 60 / (2π)
+モーターRPM_i = 車輪RPM_i × gear_ratio_i
+</code></pre>
+<p>gear_ratio は「モーター回転数 ÷ 車輪回転数」で、20なら車輪1回転につきモーター20回転。YAMLの gear_ratios で各輪の値を指定でき、初期値は [1.0, 1.0, 1.0, 1.0] とする。省略時もこの初期値を使用する。初期値1.0では車輪RPMとモーターRPMが同じ数値になる。Roboteq の指令・フィードバックがモーター軸RPMを表すことを確認する。車輪軸換算済みの設定なら、この設計と整合させ、二重換算を避ける。</p>
+<p>既存の寸法値 ((205, 170), 63.5) の単位は mm。長さパラメータは205 mm・170 mm、車輪半径は63.5 mmとして引き継ぎ、計算内部では lx=0.205 m、ly=0.170 m、r=0.0635 m に換算する。lx・lyと実機の寸法方向との対応は実機試験で照合する。既存の angular.z × 30、±15クリップ、未使用の vel_to_rpm() の係数1/6は流用しない。</p>
+<h3>RPM制限と整数化</h3>
+<p>各輪上限を M_i、計算したRPMを n_i とする。上限を超える場合は全輪に同じ係数を掛ける。</p>
+<pre><code class="language-text">α = min(1, M_i / abs(n_i) のうち n_i != 0 のもの)
+制限後RPM_i = α × n_i
+全輪ゼロなら α = 1
+</code></pre>
+<p>ドライバーの直接入力経路でも同じ上限を適用する。方向補正後、ゼロ方向への切り捨てで整数化する（既存 int() と同じ）。1 RPM未満の絶対値は0になる。低速での量子化の影響は試験で確認する。</p>
+<h2>5. シリアル通信</h2>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>仕様案</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>前側ポート</td>
+<td>/dev/roboteq_1</td>
+</tr>
+<tr>
+<td>後側ポート</td>
+<td>/dev/roboteq_2</td>
+</tr>
+<tr>
+<td>通信</td>
+<td>115200 bps、8データビット、パリティなし、1ストップビット</td>
+</tr>
+<tr>
+<td>速度指令</td>
+<td>!S <CH> &lt;符号付き整数RPM&gt;_</td>
+</tr>
+<tr>
+<td>停止指令</td>
+<td>!MS <CH>_ を全チャンネルへ送信</td>
+</tr>
+<tr>
+<td>方向補正</td>
+<td>motor_directions の各要素を +1 または -1 とする</td>
+</tr>
+</tbody>
+</table>
+<p>既存は全輪の符号を反転しているため [-1, -1, -1, -1] が移植候補だが、実機の方向確認を必要とする。例えば入力100 RPM、方向係数-1、CH1なら !S 1 -100_ を送る。</p>
+<p>Roboteqマニュアルでは Closed Loop Speed 時の !S はRPM直接指定、!G は Max RPM に対する相対指令。!S を送信しても運転モード自体は切り替わらない。対象機種・ファームウェアの !S 対応、コマンド終端、速度センサー設定を実機運転前に照合する。ソフトから運転モードやEEPROM設定を自動変更しない。</p>
+<p>両ポートが正常に開けた状態でのみ駆動を許可する。一方の初期化失敗・書き込み例外では駆動無効とし、通信可能な側に停止を試みる。通信成功や受信応答と、実回転数への到達は区別する。初期実装ではシリアル応答の解析・実測RPM取得は行わず、送信例外と短い書き込みを検出する。応答による受理確認は今後の対応とする。書き込みタイムアウトは0.1秒とし、ポートは排他オープンする。</p>
+<h2>6. 駆動許可と停止</h2>
+<p>停止動作は以下のとおり。</p>
+<ul>
+<li>起動直後は入力待機。両ポートの初期化後に全輪停止を送信する。</li>
+<li>新しく受信した有効なRPM指令で駆動開始する。保存済み指令だけで再始動しない。</li>
+<li>Twistタイムアウト時、rover_velocity は保存指令を破棄し、ゼロRPMを発行する。</li>
+<li>RPMタイムアウト時、cmd_roboteq は全輪停止し、保存指令を破棄する。新しい有効なRPM指令で再開する。</li>
+<li>不正入力・通信異常でも停止し、原因をログに記録する。復旧直後に古い指令を再開しない。</li>
+<li>正常終了時に停止送信を試みてからポートを閉じる。プロセス強制終了・電源断はこの処理では保証できない。</li>
+</ul>
+<p>指令周期20 Hz、Twist/RPMタイムアウト各0.5秒を既定値とする。受信間隔の監視は単調増加時計を用いる。ドライバーは新しいROS入力を受信した時だけ受信時刻を更新し、シリアルへの周期送信では更新しない。</p>
+<p>駆動許可信号は使用しない。通信例外による障害はラッチし、復旧には原因を解消したうえでノードを再起動する。</p>
+<p>ドライバーが停止・通信断した場合にも備え、Roboteq側のコマンドウォッチドッグの動作・設定値を実機確認する。旧ドライバーと新ドライバーで同じシリアルポートを同時使用しない。</p>
+<h2>7. 設定と入力検証</h2>
+<table>
+<thead>
+<tr>
+<th>設定名案</th>
+<th>単位・条件</th>
+<th>初期案／状態</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>wheel_radius_m</td>
+<td>正の有限値、m</td>
+<td>0.0635（既存63.5 mmから換算）</td>
+</tr>
+<tr>
+<td>half_length_m / half_width_m</td>
+<td>正の有限値、m</td>
+<td>0.205 / 0.170（既存205 / 170 mmから換算。寸法方向の対応は要確認）</td>
+</tr>
+<tr>
+<td>gear_ratios</td>
+<td>正の有限値4個</td>
+<td>[1.0, 1.0, 1.0, 1.0]。各輪で変更可能</td>
+</tr>
+<tr>
+<td>motor_directions</td>
+<td>+1/-1を4個</td>
+<td>全輪-1候補、要確認</td>
+</tr>
+<tr>
+<td>max_motor_rpm</td>
+<td>正の有限値4個、RPM</td>
+<td>配布YAMLは全輪300 RPM。YAML未使用時は明示指定が必要で、未指定の0は起動エラー</td>
+</tr>
+<tr>
+<td>command_rate_hz</td>
+<td>正の有限値、Hz</td>
+<td>20.0</td>
+</tr>
+<tr>
+<td>twist_timeout_sec / rpm_timeout_sec</td>
+<td>正の有限値、秒</td>
+<td>各0.5</td>
+</tr>
+<tr>
+<td>front_port / back_port</td>
+<td>異なるデバイスパス</td>
+<td>/dev/roboteq_1、/dev/roboteq_2</td>
+</tr>
+<tr>
+<td>baudrate</td>
+<td>機器と一致</td>
+<td>115200</td>
+</tr>
+</tbody>
+</table>
+<p>必須設定の不足・不正は起動エラーとする。gear_ratios は省略時に全輪1.0を使用し、指定された値が不正なら起動エラーとする。RPM単体ドライバーには寸法・減速比は不要だが、方向とRPM上限は必要。</p>
+<p>Twistの使用する3成分とRPM配列全要素が有限値であることを検証する。RPM配列はちょうど4要素を要求する。NaN、無限大、要素数違いを黙って使用しない。コントローラのコマンド範囲を超える設定も拒否する。</p>
+<h2>8. 実装と確認の順序</h2>
+<ol>
+<li>実機の型番、Closed Loop Speedモード、!S対応、RPMの軸基準、センサー設定を確認する。</li>
+<li>cmd_roboteq 単体を作り、モックシリアルで4要素の順序・符号・文字列・停止条件を確認する。</li>
+<li>車輪を浮かせ、停止操作を用意して、低いRPMで1チャンネルずつ実回転方向と実測RPMを比較する。具体的な試験RPMは機体仕様確認後に決める。</li>
+<li>車輪形式・配置・半径・減速比を確定し、Twist変換を実装する。</li>
+<li>前進、横移動、旋回を個別に試験し、各輪の符号と回転数を確認する。</li>
+<li>上限、タイムアウト、不正入力、通信異常からの停止・復帰を確認する。</li>
+</ol>
+<h3>受け入れ基準</h3>
+<ul>
+<li>純粋な前進入力では候補行列上の4輪RPMが等しく、横移動・旋回では定義した符号パターンになる。</li>
+<li>既知の半径・減速比を用いた計算が式と一致し、ゼロ入力で全輪ゼロになる。</li>
+<li>上限超過時は全輪の比率を維持し、各輪上限以内になる。</li>
+<li>方向補正は一度だけ適用され、!S のチャンネルと整数RPMが期待値に一致する。</li>
+<li>無効状態・古い入力・不正入力で非ゼロの速度指令を出さない。</li>
+<li>通常のイベント処理時、タイムアウト停止は設定時間＋監視周期以内に開始する。通信処理の遅延やOSのスケジューリングがあるため、厳密なリアルタイム保証ではない。物理的な停止時間はコントローラの減速設定による。</li>
+<li>実機の定常実測RPMと指令RPMを比較する。許容誤差と整定時間は機体・センサー確認後に定める。</li>
+</ul>
+<h2>9. 未確定事項</h2>
+<ul>
+<li>車輪形式（メカナム／オムニ等）、ローラー配置と、行列の各行に対応する物理的な車輪位置。</li>
+<li>lx・lyと実機の寸法方向との対応、各輪の減速比、回転方向。</li>
+<li>Roboteqの型番・ファームウェア、速度フィードバックの軸基準・換算設定。</li>
+<li>最大RPM、加減速設定、通信ウォッチドッグ、試験時の許容誤差。</li>
+<li>シリアル応答処理の詳細。</li>
+</ul>
+<h2>10. 根拠</h2>
+<p>既存コード：locomotion_core/locomotion_core/rover_velocity.py、RoverDescription.py、RobotDefinition.py、cmd_roboteq.py。既存経路は運動学出力を±15に制限して !G へ渡し、明示的な減速比の換算はない。</p>
+<p><a href="https://www.bipom.com/documents/roboteq/Roboteq%20Controllers%20User%20Manual_v2.1.pdf">Roboteq Controllers User Manual V2.1</a>：印刷ページ199–200のG、202のMS、206のSを参照。これは一般仕様の根拠であり、実機の対応確認を置き換えるものではない。</p>
+<h2>11. ソフトウェア検証と起動</h2>
+<p>モックと仮想シリアルによる19件のpytestテスト、およびROS 2 Jazzyでのcolcon buildを実施。速度換算、比例制限、入力検証、起動停止、新規入力による駆動開始、タイムアウト、通信例外、終了時の停止を検証した。実機の速度追従は未検証。起動方法はパッケージ直下のREADME.mdを参照。</p>
+</main></body></html>
