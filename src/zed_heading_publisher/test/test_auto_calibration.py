@@ -15,6 +15,7 @@ def controller():
     node.turn_started = None
     node.last_mag = None
     node.last_odom = None
+    node.finished = False
     node.speed = 0.15
     node.abort = Mock()
     return node
@@ -59,3 +60,39 @@ def test_rotation_has_wall_clock_limit(monkeypatch):
     node.control_callback()
     node.abort.assert_called_once()
     node.command_publisher.publish.assert_not_called()
+
+
+def test_finished_controller_never_restarts_rotation():
+    node = controller()
+    node.finished = True
+    node.control_callback()
+    assert node.command_publisher.publish.call_args.args[0].angular.z == 0.0
+    node.abort.assert_not_called()
+
+
+def test_completion_exits_process_without_hardware(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    script = '''
+import time
+from zed_heading_publisher import auto_calibrate_zed_heading as module
+original_init = module.AutoZedHeadingCalibrator.__init__
+def initialize(self):
+    original_init(self)
+    self.turn_started = time.monotonic()
+    self.last_mag = self.last_odom = time.monotonic()
+    self._has_reached_target_rotation = lambda: True
+    self._finish = self.stop
+module.AutoZedHeadingCalibrator.__init__ = initialize
+module.main()
+print('PROCESS_COMPLETED', flush=True)
+'''
+    result = subprocess.run(
+        [sys.executable, '-c', script],
+        env={**os.environ, 'ROS_LOG_DIR': str(tmp_path / 'logs'),
+             'ROS_AUTOMATIC_DISCOVERY_RANGE': 'LOCALHOST'},
+        capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'PROCESS_COMPLETED' in result.stdout

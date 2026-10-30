@@ -60,9 +60,11 @@ class AutoZedHeadingCalibrator(ZedHeadingCalibrator):
         self.stop()
         self.finished = True
         self.get_logger().error(reason + '; stopped without saving calibration')
-        rclpy.shutdown()
 
     def control_callback(self):
+        if self.finished:
+            self.stop()
+            return
         now = time.monotonic()
         fresh = all(stamp is not None and now - stamp < self.sensor_timeout
                     for stamp in (self.last_mag, self.last_odom))
@@ -108,7 +110,9 @@ def main(args=None):
     signal.signal(signal.SIGTERM, interrupt)
     try:
         node = AutoZedHeadingCalibrator()
-        rclpy.spin(node)
+        # Leave the executor callback before shutting down the ROS context.
+        while rclpy.ok() and not node.finished:
+            rclpy.spin_once(node, timeout_sec=0.1)
     except KeyboardInterrupt:
         pass
     finally:

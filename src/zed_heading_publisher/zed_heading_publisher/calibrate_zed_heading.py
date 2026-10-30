@@ -489,7 +489,6 @@ class ZedHeadingCalibrator(Node):
                 self.finished = True
                 self.finish_reason = 'target rotation reached'
                 self._finish()
-                rclpy.shutdown()
                 return
             if elapsed >= self.max_duration_sec:
                 self.finished = True
@@ -498,14 +497,12 @@ class ZedHeadingCalibrator(Node):
                     'max_duration_sec reached before target rotation/coverage'
                 )
                 self._finish()
-                rclpy.shutdown()
                 return
 
         if not self.use_vio_turn_detection and elapsed >= self.duration_sec:
             self.finished = True
             self.finish_reason = 'duration reached'
             self._finish()
-            rclpy.shutdown()
 
     def input_csv_timer_callback(self):
         if self.finished:
@@ -537,7 +534,6 @@ class ZedHeadingCalibrator(Node):
                 'failed to load calibration CSV %s: %s'
                 % (self.input_csv_path, exc)
             )
-        rclpy.shutdown()
 
     def _has_reached_target_rotation(self) -> bool:
         return (
@@ -778,7 +774,9 @@ def main(args: Optional[list] = None):
     node = None
     try:
         node = ZedHeadingCalibrator()
-        rclpy.spin(node)
+        # Shutdown only after the active callback has returned.
+        while rclpy.ok() and not node.finished:
+            rclpy.spin_once(node, timeout_sec=0.1)
     finally:
         if node is not None:
             node.destroy_node()
