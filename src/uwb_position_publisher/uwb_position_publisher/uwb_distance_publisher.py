@@ -42,18 +42,32 @@ def normalize_line(line) -> str:
     return text
 
 
-def parse_uwb_csv(line) -> ParsedUwbDistances:
+def validate_distance_columns(distance_columns: Sequence[int]):
+    if len(distance_columns) != 3 or any(
+        type(column) is not int or column < 1 for column in distance_columns
+    ):
+        raise ValueError('distance_columns must contain exactly 3 positive integers')
+
+
+def parse_uwb_csv(
+    line, distance_columns: Sequence[int] = (1, 2, 3),
+) -> ParsedUwbDistances:
+    # CSV column 0 is time; columns 1 onward are distances.
+    validate_distance_columns(distance_columns)
     raw_line = normalize_line(line)
     if raw_line == '':
         raise UwbParseError('empty line')
 
     columns = [column.strip() for column in raw_line.split(',')]
-    if len(columns) != 4:
-        raise UwbParseError(f'expected 4 columns, got {len(columns)}')
+    if len(columns) <= max(distance_columns):
+        raise UwbParseError(
+            f'expected at least {max(distance_columns) + 1} columns, '
+            f'got {len(columns)}'
+        )
 
     try:
         device_time_ms = int(columns[0])
-        distances_cm = (int(columns[1]), int(columns[2]), int(columns[3]))
+        distances_cm = tuple(int(columns[column]) for column in distance_columns)
     except ValueError as exc:
         raise UwbParseError('failed to parse integer fields') from exc
 
@@ -110,6 +124,7 @@ class UwbDistancePublisher(Node):
         self.declare_parameter('read_timeout', 0.1)
         self.declare_parameter('reconnect_interval', 1.0)
         self.declare_parameter('invalid_distance_cm', 65535)
+        self.declare_parameter('distance_columns', [1, 2, 3])
         self.declare_parameter('frame_id', 'uwb')
         self.declare_parameter('timer_period', 0.01)
 
@@ -122,6 +137,7 @@ class UwbDistancePublisher(Node):
         self.invalid_distance_cm = int(
             self.get_parameter('invalid_distance_cm').value
         )
+        self.distance_columns = tuple(self.get_parameter('distance_columns').value)
         self.frame_id = str(self.get_parameter('frame_id').value)
         self.timer_period = float(self.get_parameter('timer_period').value)
         self._validate_parameters()
@@ -135,7 +151,8 @@ class UwbDistancePublisher(Node):
 
         self.get_logger().info(
             'serial_port=%s baudrate=%d read_timeout=%.3f '
-            'reconnect_interval=%.3f invalid_distance_cm=%d frame_id=%s'
+            'reconnect_interval=%.3f invalid_distance_cm=%d frame_id=%s '
+            'distance_columns=%s'
             % (
                 self.serial_port,
                 self.baudrate,
@@ -143,11 +160,13 @@ class UwbDistancePublisher(Node):
                 self.reconnect_interval,
                 self.invalid_distance_cm,
                 self.frame_id,
+                self.distance_columns,
             )
         )
         self.get_logger().info('publishing UWB distances on /uwb/distances')
 
     def _validate_parameters(self):
+        validate_distance_columns(self.distance_columns)
         if self.baudrate <= 0:
             raise ValueError('baudrate must be greater than 0')
         if self.read_timeout < 0.0:
@@ -213,7 +232,7 @@ class UwbDistancePublisher(Node):
             return
 
         try:
-            parsed = parse_uwb_csv(normalized)
+            parsed = parse_uwb_csv(normalized, self.distance_columns)
         except UwbParseError as exc:
             self.get_logger().warn(f'invalid UWB CSV: {exc}; raw_line="{normalized}"')
             return
