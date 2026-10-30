@@ -9,6 +9,7 @@
 
   <buildtool_depend>ament_python</buildtool_depend>
 
+  <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>rcl_interfaces</depend>
   <depend>rclpy</depend>
@@ -17,6 +18,10 @@
   <depend>zed_interfaces</depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>zed_wrapper_data_hub</exec_depend>
+  <exec_depend>locomotion_core_rpm</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

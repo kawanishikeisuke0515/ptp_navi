@@ -25,6 +25,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'auto_calibrate_zed_heading = zed_heading_publisher.auto_calibrate_zed_heading:main',
             'zed_heading_publisher = zed_heading_publisher.zed_heading_publisher:main',
             'calibrate_zed_heading = zed_heading_publisher.calibrate_zed_heading:main',
             'compare_vio_heading = zed_heading_publisher.compare_vio_heading:main',

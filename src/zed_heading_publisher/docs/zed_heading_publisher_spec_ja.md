@@ -484,3 +484,41 @@ ros2 run zed_heading_publisher calibrate_zed_heading --ros-args -p save_config:=
 CSVからの再校正も同じ保存仕様。サンプル数がmin_samples未満、計算失敗、
 VIOモードで旋回完了前のmax_duration_sec到達の場合は上書きしない。
 起動済みの方位配信ノードには自動反映されないため、保存後に再起動する。
+
+## 自動旋回キャリブレーション
+
+`ptp_navi` ワークスペースでビルド後、次を実行する。
+
+```bash
+colcon build --symlink-install --packages-select zed_heading_publisher
+source install/setup.bash
+ros2 launch zed_heading_publisher calibrate_zed_heading.launch.py
+```
+
+ZED data hub、`locomotion_core_rpm` のホイール制御、自動キャリブレーションNodeを起動する。
+磁気とVIOの受信を待ち、`/rov_cmd_vel` に並進ゼロ・角速度0.15 rad/sを20 Hzで送信する。
+VIOの累積回転360度と角度カバレッジ70%以上で停止し、既存Nodeの処理で補正値と開始時のゼロ方位をYAMLへ保存する。
+終了時にはLaunch全体も終了する。開始姿勢がゼロ方位になるため、ロボットを基準方向に向けて実行する。
+走行用Nodeや他の速度指令発行元は停止し、周囲に旋回できる空間を確保する。
+
+起動待ちは60秒、旋回は最大90秒。受信が1秒途切れると停止し、保存しない。
+Ctrl+Cでも停止指令を送信する。プロセス強制終了などで指令が止まった場合は、
+ホイールドライバの既存Twist/RPMタイムアウト（既定各0.5秒）が働く。
+
+```bash
+# ZEDやホイール制御が既に起動している場合
+ros2 launch zed_heading_publisher calibrate_zed_heading.launch.py start_zed:=false start_wheels:=false
+
+# 逆方向に旋回し、保存先と生サンプルCSVを明示する場合
+ros2 launch zed_heading_publisher calibrate_zed_heading.launch.py \
+  angular_speed_rad_sec:=-0.15 \
+  output_config_path:=/absolute/path/to/zed_heading_publisher.yaml \
+  sample_csv_path:=/tmp/zed_heading_samples.csv
+```
+
+`output_config_path` を省略すると既存キャリブレーションNodeと同じ保存先を使う。
+symlink-installではソース側YAML、それ以外ではインストール側YAMLが対象になる。
+`wheel_config` でモーターポート等の設定を変更できる。`command_topic` を変更する場合は、
+ホイール設定の `command_topic` も一致させること。
+角速度は絶対値0より大きく0.3 rad/s以下。`mag_topic`、`odom_topic`、
+`startup_timeout_sec`、`sensor_timeout_sec`、`max_duration_sec`、`target_rotation_deg` も指定可能。
