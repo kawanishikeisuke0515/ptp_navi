@@ -517,7 +517,9 @@ ros2 launch zed_heading_publisher calibrate_zed_heading.launch.py \
 ```
 
 `output_config_path` を省略すると既存キャリブレーションNodeと同じ保存先を使う。
-symlink-installではソース側YAML、それ以外ではインストール側YAMLが対象になる。
+通常ビルドでもsymlink-installでも、ワークスペースの `src/zed_heading_publisher/config/zed_heading_publisher.yaml` を更新する。
+ソースが見つからない場合は保存エラーを出すため、`output_config_path` にソースYAMLを指定する。
+通常ビルドでは、更新後に再ビルドしてinstall側の実行用設定にも反映する。
 `wheel_config` でモーターポート等の設定を変更できる。`command_topic` を変更する場合は、
 ホイール設定の `command_topic` も一致させること。
 角速度は絶対値0より大きく0.3 rad/s以下。`mag_topic`、`odom_topic`、

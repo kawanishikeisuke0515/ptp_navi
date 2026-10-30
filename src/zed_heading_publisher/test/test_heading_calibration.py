@@ -160,3 +160,40 @@ def test_csv_calibration_config_save(tmp_path, save_config, min_samples, updated
     params = yaml.safe_load(config.read_text())['zed_heading_publisher']['ros__parameters']
     assert params['center_x'] == pytest.approx(10.0 if updated else 999.0)
     assert params['publish_rate_hz'] == 17.0
+
+
+@pytest.mark.parametrize('merged', [False, True])
+def test_source_config_selected_from_regular_install(tmp_path, merged):
+    from zed_heading_publisher.calibrate_zed_heading import find_source_config
+
+    source = tmp_path / 'src/zed_heading_publisher/config/zed_heading_publisher.yaml'
+    source.parent.mkdir(parents=True)
+    source.write_text('source')
+    prefix = tmp_path / 'install'
+    if not merged:
+        prefix /= 'zed_heading_publisher'
+    share = prefix / 'share/zed_heading_publisher'
+    installed = share / 'config/zed_heading_publisher.yaml'
+    installed.parent.mkdir(parents=True)
+    installed.write_text('installed')
+    module = prefix / 'lib/python3.12/site-packages/zed_heading_publisher/calibrate_zed_heading.py'
+    assert find_source_config(module, share) == source
+    source.unlink()
+    with pytest.raises(FileNotFoundError, match='output_config_path'):
+        find_source_config(module, share)
+
+
+def test_source_config_selected_from_symlink_install(tmp_path):
+    from zed_heading_publisher.calibrate_zed_heading import find_source_config
+
+    package = tmp_path / 'src/zed_heading_publisher'
+    config = package / 'config/zed_heading_publisher.yaml'
+    config.parent.mkdir(parents=True)
+    config.write_text('source')
+    (package / 'package.xml').touch()
+    module = package / 'zed_heading_publisher/calibrate_zed_heading.py'
+    module.parent.mkdir()
+    module.touch()
+    link = tmp_path / 'installed_module.py'
+    link.symlink_to(module)
+    assert find_source_config(link, tmp_path / 'install/share/zed_heading_publisher') == config

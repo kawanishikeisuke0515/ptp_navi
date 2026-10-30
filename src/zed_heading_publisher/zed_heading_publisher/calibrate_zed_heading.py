@@ -24,12 +24,28 @@ from .zed_heading_publisher import is_finite
 from .zed_heading_publisher import normalize_to_180
 
 
+def find_source_config(module_path: Path, package_share: Path) -> Path:
+    relative_config = Path('config') / 'zed_heading_publisher.yaml'
+    # A resolved symlink install points directly into the source package.
+    source_package = module_path.resolve().parent.parent
+    if (source_package / 'package.xml').is_file():
+        candidate = source_package / relative_config
+        if candidate.is_file():
+            return candidate
+    # Both isolated and merged colcon installs live below the workspace root.
+    for location in (package_share.resolve(), module_path.resolve()):
+        for ancestor in location.parents:
+            candidate = ancestor / 'src' / 'zed_heading_publisher' / relative_config
+            if candidate.is_file():
+                return candidate
+    raise FileNotFoundError(
+        'Source config src/zed_heading_publisher/config/zed_heading_publisher.yaml '
+        'not found; set output_config_path to the source YAML explicitly')
+
+
 def default_output_config_path() -> Path:
-    # Resolving __file__ also finds the source tree in a symlink install.
-    source_config = Path(__file__).resolve().parent.parent / 'config' / 'zed_heading_publisher.yaml'
-    if source_config.is_file():
-        return source_config
-    return Path(get_package_share_directory('zed_heading_publisher')) / 'config' / 'zed_heading_publisher.yaml'
+    return find_source_config(
+        Path(__file__), Path(get_package_share_directory('zed_heading_publisher')))
 
 
 def update_calibration_config(config_path: Path, parameters: dict) -> None:
