@@ -24,6 +24,9 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('config_file', default_value=share_file(
             'path_control', 'config', 'path_control.yaml')),
+        DeclareLaunchArgument('start_logger', default_value='true'),
+        DeclareLaunchArgument('logger_config', default_value=share_file(
+            'path_control', 'config', 'path_control_logger.yaml')),
         DeclareLaunchArgument('start_sensors', default_value='true',
                               description='Start UWB, ZED, heading and robot pose nodes.'),
         DeclareLaunchArgument('start_locomotion', default_value='true',
@@ -48,6 +51,9 @@ def generate_launch_description():
                 IfCondition(LaunchConfiguration('start_locomotion'))),
         include('jetson_power_publisher', 'jetson_power_publisher.launch.py',
                 condition=IfCondition(LaunchConfiguration('start_power'))),
+        Node(package='path_control', executable='path_control_logger',
+             name='path_control_logger', parameters=[LaunchConfiguration('logger_config')],
+             condition=IfCondition(LaunchConfiguration('start_logger')), output='screen'),
         Node(package='path_control', executable='path_control', name='path_control',
              parameters=[LaunchConfiguration('config_file')], output='screen'),
     ])

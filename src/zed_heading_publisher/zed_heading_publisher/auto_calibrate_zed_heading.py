@@ -4,12 +4,13 @@ import math
 import os
 import signal
 import time
+from pathlib import Path
 
 from geometry_msgs.msg import Twist
 import rclpy
 from rclpy.signals import SignalHandlerOptions
 
-from .calibrate_zed_heading import ZedHeadingCalibrator
+from .calibrate_zed_heading import ZedHeadingCalibrator, default_output_config_path
 
 
 class AutoZedHeadingCalibrator(ZedHeadingCalibrator):
@@ -29,6 +30,11 @@ class AutoZedHeadingCalibrator(ZedHeadingCalibrator):
                 raise ValueError('timeouts must be positive and finite')
         if self.input_csv_path or not self.use_vio_turn_detection:
             raise ValueError('automatic rotation requires live VIO turn detection')
+        # Resolve before moving so a missing source tree cannot go unnoticed.
+        config_path = (Path(self.output_config_path) if self.output_config_path
+                       else default_output_config_path())
+        self.output_config_path = str(config_path.expanduser().resolve(strict=True))
+        self.get_logger().info('Calibration YAML destination: %s' % self.output_config_path)
         self.command_publisher = self.create_publisher(
             Twist, str(self.get_parameter('command_topic').value), 1)
         self.wait_started = time.monotonic()

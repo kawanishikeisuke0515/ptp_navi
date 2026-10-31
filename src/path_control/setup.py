@@ -10,4 +10,5 @@ setup(name='path_control', version='0.1.0', packages=find_packages(exclude=['tes
       install_requires=['setuptools'], tests_require=['pytest'],
       maintainer='user', maintainer_email='user@example.com', license='Apache-2.0',
       description='Autonomous straight path tracking using UWB robot poses',
-      entry_points={'console_scripts': ['path_control = path_control.node:main']})
+      entry_points={'console_scripts': ['path_control = path_control.node:main',
+                                          'path_control_logger = path_control.logger:main']})
