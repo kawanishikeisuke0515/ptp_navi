@@ -7,8 +7,8 @@ import time
 import rclpy
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
-from rclpy.parameter_client import AsyncParameterClient
 from rclpy.qos import qos_profile_sensor_data
+from rcl_interfaces.srv import GetParameters, ListParameters
 from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg import String
 from uwb_interfaces.msg import UwbPosition
@@ -17,6 +17,23 @@ from .log_store import LogStore
 
 def finite(*values):
     return all(isinstance(v, (int, float)) and math.isfinite(v) for v in values)
+
+
+class ParameterSnapshotClient:
+    """Use parameter services directly, including on ROS 2 Humble."""
+
+    def __init__(self, node, name):
+        self.list_client = node.create_client(ListParameters, f'{name}/list_parameters')
+        self.get_client = node.create_client(GetParameters, f'{name}/get_parameters')
+
+    def services_are_ready(self):
+        return self.list_client.service_is_ready() and self.get_client.service_is_ready()
+
+    def list_parameters(self):
+        return self.list_client.call_async(ListParameters.Request())
+
+    def get_parameters(self, names):
+        return self.get_client.call_async(GetParameters.Request(names=names))
 
 
 class PathControlLogger(Node):
@@ -50,7 +67,7 @@ class PathControlLogger(Node):
         steady = Clock(clock_type=ClockType.STEADY_TIME)
         self.create_timer(1 / config['timeline_rate_hz'], self.timeline, clock=steady)
         self.create_timer(1.0, self.store.flush, clock=steady)
-        self.parameter_clients = {name: AsyncParameterClient(self, name) for name in (
+        self.parameter_clients = {name: ParameterSnapshotClient(self, name) for name in (
             '/path_control', '/uwb_position_publisher', '/uwb_robot_pose_publisher',
             '/zed_heading_publisher', '/rover_velocity_rpm')}
         self.pending = {}
