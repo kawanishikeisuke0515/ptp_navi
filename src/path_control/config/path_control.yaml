@@ -11,12 +11,12 @@ path_control:
     path_speed_m_s: 0.1
     min_linear_speed_m_s: 0.05
     max_linear_speed_m_s: 0.2
-    cross_track_gain: 0.005
-    heading_gain: 1.0
+    cross_track_gain: 0.025
+    heading_gain: 2.0
     max_angular_speed_rad_s: 0.4
     init_timeout_sec: 10.0
     position_timeout_sec: 0.6
     heading_timeout_sec: 0.6
     init_sample_count: 10
-    goal_tolerance_m: 0.10
-    goal_hold_sec: 2.0
+    goal_tolerance_m: 0.15
+    goal_hold_sec: 1.0

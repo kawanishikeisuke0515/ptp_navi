@@ -1,0 +1,9 @@
+optitrack_center:
+  ros__parameters:
+    input_topic: /vrpn_mocap/RigidBody_1/pose
+    output_topic: /optitrack/robot_pose
+    # Robot center -> rigid-body origin [m], expressed in rigid-body LOCAL axes.
+    # Measure these values; zero means the rigid-body origin is already at center.
+    center_to_rigid_body_x_m: -0.23
+    center_to_rigid_body_y_m: 0.33
+    center_to_rigid_body_z_m: 0.0

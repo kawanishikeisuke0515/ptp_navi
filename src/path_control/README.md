@@ -128,3 +128,26 @@ OptiTrackはbest effort、他はreliableで購読する。ログは毎秒flush�
 強制終了・電源断では最後のバッファが失われる可能性がある。
 座標変換・OptiTrack剛体と車体中心の位置合わせは行わないため、
 座標系と取り付け位置を揃えてから誤差を評価する。
+
+### OptiTrackのロボット中心位置への補正
+
+OptiTrackの剛体原点とロボット中心が異なる場合は、独立した変換ノードを起動する。
+
+```bash
+colcon build --packages-select path_control
+source install/setup.bash
+ros2 launch path_control optitrack_center.launch.py
+```
+
+`config/optitrack_center.yaml` の `center_to_rigid_body_x_m`,
+`center_to_rigid_body_y_m`, `center_to_rigid_body_z_m` に、**ロボット中心から剛体原点へ向かうベクトルを、剛体ローカルXYZ軸で表した値 [m]** を設定する。
+初期値はすべて0なので、実機で測定して設定すること。軸はMotiveの剛体定義に従うため、Xが車体前方とは限らない。
+
+入力は `/vrpn_mocap/RigidBody_1/pose`、出力は `/optitrack/robot_pose`。
+`中心位置 = 剛体原点位置 − R(剛体Quaternion) × オフセット` で3次元補正する。
+測定時刻、座標系、剛体の姿勢は保持する。非有限値や不正なQuaternionは配信しない。
+UWBのworld座標系への変換や、剛体軸から車体軸への姿勢補正は行わない。
+
+中心位置を実験ログに記録する場合は、`path_control_logger.yaml` の
+`optitrack_pose_topic` を `/optitrack/robot_pose` に変更し、この変換ノードを併せて起動する。
+既存の制御入力は引き続き `/uwb/robot_pose`。

@@ -55,7 +55,7 @@ def track(a, goal, pose, c):
     omega = max(-c.max_angular_speed_rad_s,
                 min(c.max_angular_speed_rad_s, c.heading_gain * error))
     return (math.cos(yaw) * vx + math.sin(yaw) * vy,
-            -math.sin(yaw) * vx + math.cos(yaw) * vy, omega)
+            math.sin(yaw) * vx - math.cos(yaw) * vy, omega)
 
 
 class Controller:
