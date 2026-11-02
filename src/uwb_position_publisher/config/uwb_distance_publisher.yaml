@@ -6,6 +6,6 @@ uwb_distance_publisher:
     reconnect_interval: 1.0
     invalid_distance_cm: 65535
     # CSV time is column 0. Selected columns map to anchor_1, anchor_2, anchor_3.
-    distance_columns: [1, 2, 3]
+    distance_columns: [4, 5, 6]
     frame_id: "uwb"
     timer_period: 0.01

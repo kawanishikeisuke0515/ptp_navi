@@ -5,6 +5,6 @@ path_control_logger:
     stale_after_sec: 0.6
     status_topic: /path_control/status
     command_topic: /rov_cmd_vel
-    optitrack_pose_topic: /vrpn_mocap/RigidBody_1/pose
+    optitrack_pose_topic: /optitrack/robot_pose
     uwb_position_topic: /uwb/position
     robot_pose_topic: /uwb/robot_pose

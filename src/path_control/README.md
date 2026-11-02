@@ -82,6 +82,9 @@ ROS_LOG_DIR=/tmp/path_control_test_logs ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST 
 Launchは既定で `path_control_logger` も起動する。保存先は
 `~/path_control_logs/<UTC日時>_<一意なID>/`。`start_logger:=false` で無効化できる。
 OptiTrack配信ノードはこのLaunchでは起動しない。配信済みのPoseを購読する。
+`start_logger:=true`（既定）では中心位置への変換ノードも起動し、
+`config/optitrack_center.yaml` のオフセットで補正した `/optitrack/robot_pose` をログに保存する。
+変換設定は `optitrack_center_config` 引数で指定できる。
 
 ```bash
 # 別のロガー設定を指定
@@ -91,15 +94,15 @@ ros2 run path_control path_control_logger --ros-args \
   --params-file /absolute/path/to/logger.yaml
 ```
 
-設定の雛形は `config/path_control_logger.yaml`。OptiTrackのRigidBody名や、
-制御側のトピック名を変更した場合はロガー側も合わせる。
+設定の雛形は `config/path_control_logger.yaml`。OptiTrackのRigidBody名は
+`config/optitrack_center.yaml` の `input_topic` に設定する。
 
 | ファイル | 内容 |
 | --- | --- |
 | `status.csv` | 制御状態・理由・始点A・目標B・受信したJSON全文 |
 | `events.csv` | Aの確定・破棄イベントと走行区間番号 |
 | `cmd_vel.csv` | ローバー指令 linear.x/y [m/s]、angular.z [rad/s] |
-| `optitrack.csv` | 元の位置xyz [m]、Quaternion、座標系 |
+| `optitrack.csv` | 補正後の中心位置xyz [m]、剛体Quaternion、OptiTrack座標系 |
 | `uwb_position.csv` | 三辺測位位置xy [m]、valid、デバイス時刻 |
 | `robot_pose.csv` | 制御入力となる補正後の車体中心位置・姿勢 |
 | `timeline.csv` | 既定20 Hzで各ストリームの最新値・受信有無・鮮度を並べた表 |
@@ -126,12 +129,13 @@ ERROR復帰時のA破棄→再確定は、同じ座標でも別区間になる�
 
 OptiTrackはbest effort、他はreliableで購読する。ログは毎秒flushし、正常終了時にcloseする。
 強制終了・電源断では最後のバッファが失われる可能性がある。
-座標変換・OptiTrack剛体と車体中心の位置合わせは行わないため、
-座標系と取り付け位置を揃えてから誤差を評価する。
+OptiTrackの中心補正オフセットを実測して設定し、
+UWBとOptiTrackの座標系を揃えてから誤差を評価する。
 
 ### OptiTrackのロボット中心位置への補正
 
-OptiTrackの剛体原点とロボット中心が異なる場合は、独立した変換ノードを起動する。
+`path_control.launch.py` はロガーと一緒に変換ノードを起動する。
+変換ノードだけを単独で使う場合は、以下で起動する（同時に二重起動しないこと）。
 
 ```bash
 colcon build --packages-select path_control
@@ -148,6 +152,6 @@ ros2 launch path_control optitrack_center.launch.py
 測定時刻、座標系、剛体の姿勢は保持する。非有限値や不正なQuaternionは配信しない。
 UWBのworld座標系への変換や、剛体軸から車体軸への姿勢補正は行わない。
 
-中心位置を実験ログに記録する場合は、`path_control_logger.yaml` の
-`optitrack_pose_topic` を `/optitrack/robot_pose` に変更し、この変換ノードを併せて起動する。
+`path_control_logger.yaml` の `optitrack_pose_topic` は既定で `/optitrack/robot_pose`。
+`optitrack.csv` と `timeline.csv` の `optitrack_x/y/z` に補正後の中心位置が記録される。
 既存の制御入力は引き続き `/uwb/robot_pose`。
