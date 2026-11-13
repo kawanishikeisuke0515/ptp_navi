@@ -77,13 +77,79 @@ class Controller:
         return min(self.c.position_timeout_sec, self.c.heading_timeout_sec)
 
     def fail(self, reason):
+        """Accept an error notification, including errors from the ROS adapter."""
+        self._transition_to(*self._next_state('failure', reason=reason))
+
+    def _next_state(self, event, now=None, reason=''):
+        """Decide the next state without modifying controller data.
+
+        Events: failure, timer, valid_pose (before storage), pose (after storage).
+        Timer checks precede input replacement so a late pose cannot hide expiry.
+        """
         if self.state == 'COMPLETE':
-            return
-        self.state = 'ERROR'
-        self.reason = reason
-        self.samples.clear()
-        self.a = None
-        self.hold_started = None
+            return self.state, self.reason
+        if event == 'failure':
+            return 'ERROR', reason
+        # Common error conditions take priority over state-specific transitions.
+        if event == 'timer' and self.received is not None and (
+                now - self.received >= self.timeout or now - self.stamp >= self.timeout):
+            return 'ERROR', 'pose_timeout'
+
+        if self.state == 'INIT':
+            if event == 'timer' and now - self.init_started >= self.c.init_timeout_sec:
+                return 'ERROR', 'init_timeout'
+            if event == 'pose' and len(self.samples) >= self.c.init_sample_count:
+                distance = math.hypot(self.c.goal_x - self.pose[0], self.c.goal_y - self.pose[1])
+                # Initialization may finish directly inside the goal region.
+                if distance <= self.c.goal_tolerance_m:
+                    return 'GOAL_CHECK', self.reason
+                return 'DRIVE', self.reason
+
+        elif self.state == 'DRIVE':
+            if event == 'timer' and math.hypot(
+                    self.c.goal_x - self.a[0], self.c.goal_y - self.a[1]) < 1e-9:
+                return 'ERROR', 'degenerate_path'
+            if event == 'pose':
+                distance = math.hypot(self.c.goal_x - self.pose[0], self.c.goal_y - self.pose[1])
+                if distance <= self.c.goal_tolerance_m:
+                    return 'GOAL_CHECK', self.reason
+
+        elif self.state == 'GOAL_CHECK':
+            if event == 'pose':
+                distance = math.hypot(self.c.goal_x - self.pose[0], self.c.goal_y - self.pose[1])
+                if distance > self.c.goal_tolerance_m:
+                    return 'DRIVE', self.reason
+                if self.stamp - self.hold_started >= self.c.goal_hold_sec:
+                    return 'COMPLETE', self.reason
+
+        elif self.state == 'ERROR':
+            if event == 'valid_pose':
+                return 'INIT', ''
+
+        # COMPLETE is handled first because it ignores even common errors.
+        return self.state, self.reason
+
+    def _transition_to(self, next_state, reason, now=None):
+        """Apply a decision and maintain the data associated with each state."""
+        previous = self.state
+        self.state, self.reason = next_state, reason
+        # Repeated failures must also clear initialization data.
+        if next_state == 'ERROR':
+            self.samples.clear()
+            self.a = None
+            self.hold_started = None
+        elif next_state != previous:
+            if next_state == 'INIT':
+                self.init_started = now
+                self.samples.clear()
+                self.a = None
+            if previous == 'INIT' and next_state in ('DRIVE', 'GOAL_CHECK'):
+                self.a = tuple(sum(p[i] for p in self.samples) / len(self.samples)
+                               for i in (0, 1))
+            if next_state == 'GOAL_CHECK':
+                self.hold_started = self.stamp
+            elif next_state == 'DRIVE':
+                self.hold_started = None
 
     def _clock(self, now):
         if now < self.last_now:
@@ -94,16 +160,7 @@ class Controller:
 
     def tick(self, now):
         self._clock(now)
-        if self.state == 'COMPLETE':
-            return (0., 0., 0.)
-        if self.received is not None and (
-                now - self.received >= self.timeout or now - self.stamp >= self.timeout):
-            self.fail('pose_timeout')
-        if self.state == 'INIT' and now - self.init_started >= self.c.init_timeout_sec:
-            self.fail('init_timeout')
-        if self.state == 'DRIVE' and math.hypot(
-                self.c.goal_x - self.a[0], self.c.goal_y - self.a[1]) < 1e-9:
-            self.fail('degenerate_path')
+        self._transition_to(*self._next_state('timer', now), now=now)
         if self.state == 'DRIVE':
             return track(self.a, (self.c.goal_x, self.c.goal_y), self.pose, self.c)
         return (0., 0., 0.)
@@ -121,29 +178,10 @@ class Controller:
         if self.stamp is not None and stamp <= self.stamp:
             self.fail('duplicate_or_reversed_stamp')
             return False
-        if self.state == 'ERROR':
-            self.state = 'INIT'
-            self.reason = ''
-            self.init_started = now
-            self.samples.clear()
-            self.a = None
+        self._transition_to(*self._next_state('valid_pose'), now=now)
         self.pose = (x, y, yaw)
         self.stamp, self.received = stamp, now
         if self.state == 'INIT':
             self.samples.append((x, y))
-            if len(self.samples) < self.c.init_sample_count:
-                return True
-            self.a = tuple(sum(p[i] for p in self.samples) / len(self.samples) for i in (0, 1))
-            self.state = 'DRIVE'
-        distance = math.hypot(self.c.goal_x - x, self.c.goal_y - y)
-        # An initially coincident A/B requires no path division.
-        if distance <= self.c.goal_tolerance_m:
-            if self.state != 'GOAL_CHECK':
-                self.hold_started = stamp
-            self.state = 'GOAL_CHECK'
-            if stamp - self.hold_started >= self.c.goal_hold_sec:
-                self.state = 'COMPLETE'
-        else:
-            self.hold_started = None
-            self.state = 'DRIVE'
+        self._transition_to(*self._next_state('pose'), now=now)
         return True

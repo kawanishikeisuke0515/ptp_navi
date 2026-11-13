@@ -105,6 +105,35 @@ def test_clock_backwards():
     assert c.reason == 'clock_backwards'
 
 
+def test_next_state_decision_does_not_apply_transition():
+    c = ready()
+    assert c._next_state('timer', .81) == ('ERROR', 'pose_timeout')
+    assert c.state == 'DRIVE'
+    assert c.a == (0., 0.)
+    assert len(c.samples) == 2
+    c.tick(.81)
+    assert c.state == 'ERROR'
+    assert c.a is None and c.samples == []
+
+
+def test_external_failure_recovery_and_terminal_state():
+    c = ready()
+    c.fail('frame_mismatch')
+    assert c.state == 'ERROR' and c.reason == 'frame_mismatch'
+    assert c.a is None and c.hold_started is None
+    c.receive(0., 0., 0., .3, .3)
+    assert c.state == 'INIT' and c.reason == ''
+    assert c.init_started == .3 and len(c.samples) == 1
+
+    c = Controller(Config(0., 0., init_sample_count=1, goal_hold_sec=.2), 0.)
+    c.receive(0., 0., 0., 0., 0.)
+    assert c.a == (0., 0.) and c.hold_started == 0.
+    c.receive(0., 0., 0., .2, .2)
+    assert c.state == 'COMPLETE'
+    c.fail('frame_mismatch')
+    assert c.state == 'COMPLETE' and c.reason == ''
+
+
 @pytest.mark.parametrize('kwargs', [
     {'goal_x': math.nan}, {'control_rate_hz': 0.}, {'init_sample_count': 2.5},
     {'min_linear_speed_m_s': 1.}, {'goal_hold_sec': -1.},
