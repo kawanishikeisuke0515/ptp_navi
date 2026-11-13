@@ -7,7 +7,7 @@ path_control:
     command_topic: /rov_cmd_vel
     status_topic: /path_control/status
     # std_msgs/Bool; monitoring starts on first receipt. Publish periodically.
-    obstacle_topic: /obstacle_detect
+    obstacle_topic: /lidar/obstacle_detected
     obstacle_clear_sec: 1.0
     obstacle_timeout_sec: 0.6
     world_frame_id: world

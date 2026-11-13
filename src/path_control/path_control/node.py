@@ -19,7 +19,7 @@ class PathControl(Node):
         parameters.update(goal_x=float('nan'), goal_y=float('nan'),
                           pose_topic='/uwb/robot_pose', command_topic='/rov_cmd_vel',
                           status_topic='/path_control/status', world_frame_id='world',
-                          obstacle_topic='/obstacle_detect')
+                          obstacle_topic='/lidar/obstacle_detected')
         for key, value in parameters.items():
             self.declare_parameter(key, value, ParameterDescriptor(read_only=True))
         values = {key: self.get_parameter(key).value for key in parameters}

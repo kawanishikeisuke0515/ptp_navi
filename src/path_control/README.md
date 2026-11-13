@@ -56,7 +56,7 @@ COMPLETE後は停止を維持し、別の目標で走行する場合は設定変
 | 方向 | 名前 | 型 | 内容 |
 | --- | --- | --- | --- |
 | 入力 | `/uwb/robot_pose` | geometry_msgs/PoseStamped | 車体中心位置・姿勢 |
-| 入力 | `/obstacle_detect` | std_msgs/Bool | 周期配信する障害物検知（trueで停止） |
+| 入力 | `/lidar/obstacle_detected` | std_msgs/Bool | 周期配信する障害物検知（trueで停止） |
 | 出力 | `/rov_cmd_vel` | geometry_msgs/Twist | 20 Hz、停止・異常遷移時は追加の即時ゼロ指令 |
 | 出力 | `/path_control/status` | std_msgs/String | 20 HzのJSON（state, reason, error, init_samples, start, goal） |
 
@@ -66,7 +66,7 @@ COMPLETE後は停止を維持し、別の目標で走行する場合は設定変
 
 ## 障害物による一時停止
 
-`obstacle_topic`（既定 `/obstacle_detect`）で true を受信すると、走行中・到達確認中は
+`obstacle_topic`（既定 `/lidar/obstacle_detected`）で true を受信すると、走行中・到達確認中は
 `PAUSE` に遷移し、その受信コールバックでゼロ速度を送信する。
 初期化中に検知した場合も、サンプル収集完了後は走行せず `PAUSE` に入る。
 開始位置と目標は保持し、停止中も位置情報を更新する。
