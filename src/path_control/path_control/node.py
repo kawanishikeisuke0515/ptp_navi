@@ -8,7 +8,7 @@ from rclpy.node import Node
 from rclpy.clock import Clock, ClockType
 from rcl_interfaces.msg import ParameterDescriptor
 from geometry_msgs.msg import PoseStamped, Twist
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from .core import Config, Controller
 
 
@@ -18,11 +18,12 @@ class PathControl(Node):
         parameters = {f.name: f.default for f in fields(Config) if f.name not in ('goal_x', 'goal_y')}
         parameters.update(goal_x=float('nan'), goal_y=float('nan'),
                           pose_topic='/uwb/robot_pose', command_topic='/rov_cmd_vel',
-                          status_topic='/path_control/status', world_frame_id='world')
+                          status_topic='/path_control/status', world_frame_id='world',
+                          obstacle_topic='/obstacle_detect')
         for key, value in parameters.items():
             self.declare_parameter(key, value, ParameterDescriptor(read_only=True))
         values = {key: self.get_parameter(key).value for key in parameters}
-        for key in ('pose_topic', 'command_topic', 'status_topic', 'world_frame_id'):
+        for key in ('pose_topic', 'command_topic', 'status_topic', 'world_frame_id', 'obstacle_topic'):
             if not values[key].strip():
                 raise ValueError(f'{key} must not be empty')
         self.world_frame = values['world_frame_id']
@@ -31,6 +32,7 @@ class PathControl(Node):
         self.command_pub = self.create_publisher(Twist, values['command_topic'], 1)
         self.status_pub = self.create_publisher(String, values['status_topic'], 10)
         self.create_subscription(PoseStamped, values['pose_topic'], self.receive, 10)
+        self.create_subscription(Bool, values['obstacle_topic'], self.receive_obstacle, 1)
         self.create_timer(1.0 / config.control_rate_hz, self.update,
                           clock=Clock(clock_type=ClockType.STEADY_TIME))
         self.get_logger().info('Path control ready: automatically starts after initialization')
@@ -55,6 +57,11 @@ class PathControl(Node):
             self.control.receive(msg.pose.position.x, msg.pose.position.y, yaw,
                                  msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9, now)
         # Publish immediately on invalid input or transition into a stopping state.
+        if self.control.state != 'DRIVE':
+            self.command_pub.publish(Twist())
+
+    def receive_obstacle(self, msg):
+        self.control.receive_obstacle(msg.data, self.now())
         if self.control.state != 'DRIVE':
             self.command_pub.publish(Twist())
 

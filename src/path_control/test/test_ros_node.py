@@ -5,19 +5,21 @@ import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from geometry_msgs.msg import PoseStamped, Twist
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from path_control.node import PathControl
 
 
 def test_topics_and_readonly_parameters():
     rclpy.init(args=['--ros-args', '-p', 'goal_x:=2.0', '-p', 'goal_y:=0.0',
                      '-p', 'init_sample_count:=2', '-p', 'pose_topic:=/test_path/pose',
-                     '-p', 'command_topic:=/test_path/cmd', '-p', 'status_topic:=/test_path/status'])
+                     '-p', 'command_topic:=/test_path/cmd', '-p', 'status_topic:=/test_path/status',
+                     '-p', 'obstacle_topic:=/test_path/obstacle'])
     controller = probe = None
     try:
         controller = PathControl()
         probe = Node('path_control_test')
         pub = probe.create_publisher(PoseStamped, '/test_path/pose', 10)
+        obstacle_pub = probe.create_publisher(Bool, '/test_path/obstacle', 1)
         commands, statuses = [], []
         probe.create_subscription(Twist, '/test_path/cmd', commands.append, 10)
         probe.create_subscription(String, '/test_path/status',
@@ -42,6 +44,11 @@ def test_topics_and_readonly_parameters():
             pub.publish(msg)
             spin_until(lambda: len(controller.control.samples) == count)
         spin_until(lambda: any(m.linear.x > 0 for m in commands))
+        spin_until(lambda: obstacle_pub.get_subscription_count() > 0)
+        commands.clear()
+        obstacle_pub.publish(Bool(data=True))
+        spin_until(lambda: controller.control.state == 'PAUSE')
+        spin_until(lambda: commands and commands[-1].linear.x == 0.)
         pub.publish(PoseStamped())
         spin_until(lambda: any(m['state'] == 'ERROR' for m in statuses))
         spin_until(lambda: commands[-1].linear.x == 0.)

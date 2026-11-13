@@ -20,6 +20,8 @@ class Config:
     init_sample_count: int = 10
     goal_tolerance_m: float = 0.1
     goal_hold_sec: float = 2.0
+    obstacle_clear_sec: float = 1.0
+    obstacle_timeout_sec: float = 0.6
 
     def __post_init__(self):
         for f in fields(self):
@@ -71,6 +73,9 @@ class Controller:
         self.received = None
         self.hold_started = None
         self.last_now = now
+        self.obstacle_detected = False
+        self.obstacle_received = None
+        self.obstacle_clear_started = None
 
     @property
     def timeout(self):
@@ -83,7 +88,7 @@ class Controller:
     def _next_state(self, event, now=None, reason=''):
         """Decide the next state without modifying controller data.
 
-        Events: failure, timer, valid_pose (before storage), pose (after storage).
+        Events: failure, timer, valid_pose (before storage), pose (after storage), obstacle.
         Timer checks precede input replacement so a late pose cannot hide expiry.
         """
         if self.state == 'COMPLETE':
@@ -95,10 +100,22 @@ class Controller:
                 now - self.received >= self.timeout or now - self.stamp >= self.timeout):
             return 'ERROR', 'pose_timeout'
 
+        # Monitoring begins with the first obstacle message. Once started,
+        # missing messages block motion just like an active detection.
+        obstacle_stale = (now is not None and self.obstacle_received is not None
+                          and now - self.obstacle_received >= self.c.obstacle_timeout_sec)
+        clear_pending = (now is not None and self.obstacle_clear_started is not None
+                         and now - self.obstacle_clear_started < self.c.obstacle_clear_sec)
+        obstacle_blocked = self.obstacle_detected or obstacle_stale or clear_pending
+        obstacle_reason = ('obstacle_timeout' if obstacle_stale else
+                           'obstacle_detected' if self.obstacle_detected else 'obstacle_clearing')
+
         if self.state == 'INIT':
             if event == 'timer' and now - self.init_started >= self.c.init_timeout_sec:
                 return 'ERROR', 'init_timeout'
             if event == 'pose' and len(self.samples) >= self.c.init_sample_count:
+                if obstacle_blocked:
+                    return 'PAUSE', obstacle_reason
                 distance = math.hypot(self.c.goal_x - self.pose[0], self.c.goal_y - self.pose[1])
                 # Initialization may finish directly inside the goal region.
                 if distance <= self.c.goal_tolerance_m:
@@ -109,18 +126,33 @@ class Controller:
             if event == 'timer' and math.hypot(
                     self.c.goal_x - self.a[0], self.c.goal_y - self.a[1]) < 1e-9:
                 return 'ERROR', 'degenerate_path'
+            if obstacle_blocked:
+                return 'PAUSE', obstacle_reason
             if event == 'pose':
                 distance = math.hypot(self.c.goal_x - self.pose[0], self.c.goal_y - self.pose[1])
                 if distance <= self.c.goal_tolerance_m:
                     return 'GOAL_CHECK', self.reason
 
         elif self.state == 'GOAL_CHECK':
+            if obstacle_blocked:
+                return 'PAUSE', obstacle_reason
             if event == 'pose':
                 distance = math.hypot(self.c.goal_x - self.pose[0], self.c.goal_y - self.pose[1])
                 if distance > self.c.goal_tolerance_m:
                     return 'DRIVE', self.reason
                 if self.stamp - self.hold_started >= self.c.goal_hold_sec:
                     return 'COMPLETE', self.reason
+
+        elif self.state == 'PAUSE':
+            if obstacle_blocked:
+                return 'PAUSE', obstacle_reason
+            # Resume only on a fresh clear message, never on elapsed time alone.
+            if (event == 'obstacle' and self.obstacle_clear_started is not None
+                    and now - self.obstacle_clear_started >= self.c.obstacle_clear_sec):
+                distance = math.hypot(self.c.goal_x - self.pose[0], self.c.goal_y - self.pose[1])
+                if distance <= self.c.goal_tolerance_m:
+                    return 'GOAL_CHECK', ''
+                return 'DRIVE', ''
 
         elif self.state == 'ERROR':
             if event == 'valid_pose':
@@ -143,12 +175,13 @@ class Controller:
                 self.init_started = now
                 self.samples.clear()
                 self.a = None
-            if previous == 'INIT' and next_state in ('DRIVE', 'GOAL_CHECK'):
+            if previous == 'INIT' and next_state in ('DRIVE', 'GOAL_CHECK', 'PAUSE'):
                 self.a = tuple(sum(p[i] for p in self.samples) / len(self.samples)
                                for i in (0, 1))
             if next_state == 'GOAL_CHECK':
-                self.hold_started = self.stamp
-            elif next_state == 'DRIVE':
+                # After PAUSE, do not count time preceding obstacle clearance.
+                self.hold_started = now if previous == 'PAUSE' else self.stamp
+            elif next_state in ('DRIVE', 'PAUSE'):
                 self.hold_started = None
 
     def _clock(self, now):
@@ -156,6 +189,9 @@ class Controller:
             self.fail('clock_backwards')
             self.stamp = None
             self.received = None
+            self.obstacle_received = None
+            self.obstacle_detected = True
+            self.obstacle_clear_started = None
         self.last_now = now
 
     def tick(self, now):
@@ -178,10 +214,25 @@ class Controller:
         if self.stamp is not None and stamp <= self.stamp:
             self.fail('duplicate_or_reversed_stamp')
             return False
-        self._transition_to(*self._next_state('valid_pose'), now=now)
+        self._transition_to(*self._next_state('valid_pose', now), now=now)
         self.pose = (x, y, yaw)
         self.stamp, self.received = stamp, now
         if self.state == 'INIT':
             self.samples.append((x, y))
-        self._transition_to(*self._next_state('pose'), now=now)
+        self._transition_to(*self._next_state('pose', now), now=now)
         return True
+
+    def receive_obstacle(self, detected, now):
+        """Store detection and require continuously fresh false messages to resume."""
+        self.tick(now)  # Check gaps before replacing the previous receipt time.
+        if self.state == 'COMPLETE':
+            return
+        gap = (self.obstacle_received is None
+               or now - self.obstacle_received >= self.c.obstacle_timeout_sec)
+        if detected:
+            self.obstacle_clear_started = None
+        elif gap or self.obstacle_detected or self.obstacle_clear_started is None:
+            self.obstacle_clear_started = now
+        self.obstacle_detected = detected
+        self.obstacle_received = now
+        self._transition_to(*self._next_state('obstacle', now), now=now)

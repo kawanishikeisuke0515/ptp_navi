@@ -56,12 +56,29 @@ COMPLETE後は停止を維持し、別の目標で走行する場合は設定変
 | 方向 | 名前 | 型 | 内容 |
 | --- | --- | --- | --- |
 | 入力 | `/uwb/robot_pose` | geometry_msgs/PoseStamped | 車体中心位置・姿勢 |
+| 入力 | `/obstacle_detect` | std_msgs/Bool | 周期配信する障害物検知（trueで停止） |
 | 出力 | `/rov_cmd_vel` | geometry_msgs/Twist | 20 Hz、停止・異常遷移時は追加の即時ゼロ指令 |
 | 出力 | `/path_control/status` | std_msgs/String | 20 HzのJSON（state, reason, error, init_samples, start, goal） |
 
 入力は有限値、単位Quaternion（ノルム誤差0.01以内）、指定frame_id、単調増加かつ未来でないstampを要求する。
 受信停止とstampの古さをともに監視する。統合Poseのため位置・姿勢timeoutの小さい方を適用する。
 パラメーターはすべて起動時固定。状態通知のerror=falseとINITへの遷移が異常解除を表す。
+
+## 障害物による一時停止
+
+`obstacle_topic`（既定 `/obstacle_detect`）で true を受信すると、走行中・到達確認中は
+`PAUSE` に遷移し、その受信コールバックでゼロ速度を送信する。
+初期化中に検知した場合も、サンプル収集完了後は走行せず `PAUSE` に入る。
+開始位置と目標は保持し、停止中も位置情報を更新する。
+
+false が `obstacle_clear_sec`（既定1秒）継続すると、新しい false の受信時に復帰する。
+現在位置がゴール範囲外なら `DRIVE`、範囲内なら `GOAL_CHECK` に戻り、ゴール保持時間を計り直す。
+途中の true、または `obstacle_timeout_sec`（既定0.6秒）以上の受信間隔で解除待ち時間をリセットする。
+受信途絶は `PAUSE`、位置情報の異常・途絶は `ERROR` を優先する。`COMPLETE` は維持する。
+
+既存構成との互換性のため、障害物情報の監視は最初の受信から開始する。
+一度も受信していない場合は障害物情報による走行制限を行わない。
+障害物検知ノードは別途起動し、受信タイムアウトより短い周期で true/false を配信する。
 
 ## 検証と仕様
 

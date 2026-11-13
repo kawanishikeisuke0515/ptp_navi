@@ -134,6 +134,71 @@ def test_external_failure_recovery_and_terminal_state():
     assert c.state == 'COMPLETE' and c.reason == ''
 
 
+def test_obstacle_pause_preserves_path_and_requires_continuous_clear():
+    c = ready()
+    start = c.a
+    c.receive_obstacle(True, .21)
+    assert c.state == 'PAUSE' and c.hold_started is None
+    assert c.tick(.22) == (0., 0., 0.)
+    for t in (.3, .5, .7):
+        c.receive(1., 0., 0., t, t)
+        c.receive_obstacle(False, t)
+        assert c.state == 'PAUSE'
+    c.receive_obstacle(True, .71)  # Detection restarts the clear interval.
+    for t in (.8, 1., 1.2, 1.4, 1.6, 1.8):
+        c.receive(1., 0., 0., t, t)
+        c.receive_obstacle(False, t)
+    assert c.state == 'DRIVE' and c.a == start
+    assert c.tick(1.81)[0] > 0
+
+
+def test_obstacle_gap_does_not_release_pause():
+    c = ready()
+    c.receive_obstacle(True, .21)
+    c.receive_obstacle(False, .3)
+    for t in (.4, .6, .8, 1., 1.2, 1.4):
+        c.receive(1., 0., 0., t, t)
+    assert c.state == 'PAUSE' and c.reason == 'obstacle_timeout'
+    c.receive_obstacle(False, 1.4)
+    assert c.obstacle_clear_started == 1.4 and c.state == 'PAUSE'
+
+
+def test_obstacle_monitor_timeout_stops_drive_and_pose_timeout_is_error():
+    c = ready()
+    c.receive_obstacle(False, .21)
+    for t in (.4, .6, .82):
+        c.receive(1., 0., 0., t, t)
+    assert c.state == 'PAUSE' and c.reason == 'obstacle_timeout'
+    assert c.tick(1.43) == (0., 0., 0.)
+    assert c.state == 'ERROR' and c.reason == 'pose_timeout'
+
+
+def test_pause_resume_uses_current_position_and_restarts_goal_hold():
+    c = ready(goal_hold_sec=.4, obstacle_clear_sec=.2)
+    c.receive(2., 0., 0., .3, .3)
+    c.receive_obstacle(True, .31)
+    assert c.state == 'PAUSE' and c.hold_started is None
+    c.receive(2., 0., 0., .4, .4)
+    c.receive_obstacle(False, .4)
+    c.receive(2., 0., 0., .6, .6)
+    c.receive_obstacle(False, .61)
+    assert c.state == 'GOAL_CHECK' and c.hold_started == .61
+    c.receive(2., 0., 0., .8, .8)
+    assert c.state == 'GOAL_CHECK'
+    c.receive(2., 0., 0., 1.02, 1.02)
+    assert c.state == 'COMPLETE'
+    c.receive_obstacle(True, 1.03)
+    assert c.state == 'COMPLETE'
+
+
+def test_obstacle_during_init_blocks_start_and_keeps_initial_average():
+    c = Controller(Config(2., 0., init_sample_count=2), 0.)
+    c.receive_obstacle(True, 0.)
+    c.receive(0., 0., 0., .1, .1)
+    c.receive(.2, 0., 0., .2, .2)
+    assert c.state == 'PAUSE' and c.a == pytest.approx((.1, 0.))
+
+
 @pytest.mark.parametrize('kwargs', [
     {'goal_x': math.nan}, {'control_rate_hz': 0.}, {'init_sample_count': 2.5},
     {'min_linear_speed_m_s': 1.}, {'goal_hold_sec': -1.},
