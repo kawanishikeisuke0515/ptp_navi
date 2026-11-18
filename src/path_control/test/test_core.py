@@ -175,7 +175,7 @@ def test_obstacle_monitor_timeout_stops_drive_and_pose_timeout_is_error():
 
 def test_pause_resume_uses_current_position_and_restarts_goal_hold():
     c = ready(goal_hold_sec=.4, obstacle_clear_sec=.2)
-    c.receive(2., 0., 0., .3, .3)
+    c.receive(1., 0., 0., .3, .3)
     c.receive_obstacle(True, .31)
     assert c.state == 'PAUSE' and c.hold_started is None
     c.receive(2., 0., 0., .4, .4)
@@ -189,6 +189,26 @@ def test_pause_resume_uses_current_position_and_restarts_goal_hold():
     assert c.state == 'COMPLETE'
     c.receive_obstacle(True, 1.03)
     assert c.state == 'COMPLETE'
+
+
+def test_goal_check_continues_despite_obstacle():
+    c = ready(goal_hold_sec=.4)
+    c.receive(2., 0., 0., .3, .3)
+    c.receive_obstacle(True, .31)
+    assert c.state == 'GOAL_CHECK' and c.hold_started == .3
+    assert c.tick(.32) == (0., 0., 0.)
+    c.receive(2., 0., 0., .5, .5)
+    c.receive(2., 0., 0., .71, .71)
+    assert c.state == 'COMPLETE'
+
+
+def test_goal_exit_with_obstacle_pauses_without_drive_command():
+    c = ready()
+    c.receive(2., 0., 0., .3, .3)
+    c.receive_obstacle(True, .31)
+    c.receive(1., 0., 0., .4, .4)
+    assert c.state == 'PAUSE' and c.hold_started is None
+    assert c.tick(.41) == (0., 0., 0.)
 
 
 def test_obstacle_during_init_blocks_start_and_keeps_initial_average():

@@ -134,11 +134,11 @@ class Controller:
                     return 'GOAL_CHECK', self.reason
 
         elif self.state == 'GOAL_CHECK':
-            if obstacle_blocked:
-                return 'PAUSE', obstacle_reason
             if event == 'pose':
                 distance = math.hypot(self.c.goal_x - self.pose[0], self.c.goal_y - self.pose[1])
                 if distance > self.c.goal_tolerance_m:
+                    if obstacle_blocked:
+                        return 'PAUSE', obstacle_reason
                     return 'DRIVE', self.reason
                 if self.stamp - self.hold_started >= self.c.goal_hold_sec:
                     return 'COMPLETE', self.reason

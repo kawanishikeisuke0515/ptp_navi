@@ -66,10 +66,12 @@ COMPLETE後は停止を維持し、別の目標で走行する場合は設定変
 
 ## 障害物による一時停止
 
-`obstacle_topic`（既定 `/lidar/obstacle_detected`）で true を受信すると、走行中・到達確認中は
+`obstacle_topic`（既定 `/lidar/obstacle_detected`）で true を受信すると、走行中は
 `PAUSE` に遷移し、その受信コールバックでゼロ速度を送信する。
 初期化中に検知した場合も、サンプル収集完了後は走行せず `PAUSE` に入る。
 開始位置と目標は保持し、停止中も位置情報を更新する。
+`GOAL_CHECK` 中はゼロ速度のまま到達判定を続ける。
+ゴール範囲から外れた際に障害物による走行制限があれば、走行せず `PAUSE` に入る。
 
 false が `obstacle_clear_sec`（既定1秒）継続すると、新しい false の受信時に復帰する。
 現在位置がゴール範囲外なら `DRIVE`、範囲内なら `GOAL_CHECK` に戻り、ゴール保持時間を計り直す。
