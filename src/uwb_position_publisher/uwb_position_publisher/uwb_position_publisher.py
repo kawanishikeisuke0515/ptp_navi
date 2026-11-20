@@ -22,8 +22,8 @@ def build_position_message(
     anchor_1: Tuple[float, float],
     anchor_2: Tuple[float, float],
     anchor_3: Tuple[float, float],
-    min_determinant: float,
     height_differences: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+    use_least_squares: bool = False,
 ) -> UwbPosition:
     msg = UwbPosition()
     msg.header = distances_msg.header
@@ -47,8 +47,8 @@ def build_position_message(
         float(distances_msg.anchor_1_distance_m),
         float(distances_msg.anchor_2_distance_m),
         float(distances_msg.anchor_3_distance_m),
-        min_determinant,
         height_differences,
+        use_least_squares=use_least_squares,
     )
     if position is None:
         msg.x_m = math.nan
@@ -66,14 +66,9 @@ class PositionFilter:
     def __init__(
         self,
         moving_average_window: int,
-        max_position_jump_m: float,
-        reset_on_invalid: bool,
     ):
         self.moving_average_window = moving_average_window
-        self.max_position_jump_m = max_position_jump_m
-        self.reset_on_invalid = reset_on_invalid
         self._samples = deque(maxlen=moving_average_window)
-        self._latest_filtered: Optional[Tuple[float, float]] = None
 
     def filter(self, msg: UwbPosition) -> UwbPosition:
         filtered_msg = UwbPosition()
@@ -81,40 +76,19 @@ class PositionFilter:
         filtered_msg.device_time_ms = msg.device_time_ms
 
         if not msg.valid or not is_finite(float(msg.x_m), float(msg.y_m)):
-            if self.reset_on_invalid:
-                self.reset()
             filtered_msg.x_m = math.nan
             filtered_msg.y_m = math.nan
             filtered_msg.valid = False
             return filtered_msg
 
         sample = (float(msg.x_m), float(msg.y_m))
-        if self._is_jump(sample):
-            filtered_msg.x_m = self._latest_filtered[0]
-            filtered_msg.y_m = self._latest_filtered[1]
-            filtered_msg.valid = True
-            return filtered_msg
-
         self._samples.append(sample)
         filtered_sample = self._moving_average()
-        self._latest_filtered = filtered_sample
 
         filtered_msg.x_m = filtered_sample[0]
         filtered_msg.y_m = filtered_sample[1]
         filtered_msg.valid = True
         return filtered_msg
-
-    def reset(self):
-        self._samples.clear()
-        self._latest_filtered = None
-
-    def _is_jump(self, sample: Tuple[float, float]) -> bool:
-        if self.max_position_jump_m <= 0.0 or self._latest_filtered is None:
-            return False
-
-        dx = sample[0] - self._latest_filtered[0]
-        dy = sample[1] - self._latest_filtered[1]
-        return math.hypot(dx, dy) > self.max_position_jump_m
 
     def _moving_average(self) -> Tuple[float, float]:
         count = len(self._samples)
@@ -137,10 +111,8 @@ class UwbPositionPublisher(Node):
         self.declare_parameter('anchor_3_y', 1.0)
         for i in range(1, 4):
             self.declare_parameter(f'anchor_{i}_height_difference_m', 0.0)
-        self.declare_parameter('min_anchor_determinant', 1.0e-9)
+        self.declare_parameter('use_least_squares', False)
         self.declare_parameter('moving_average_window', 5)
-        self.declare_parameter('max_position_jump_m', 1.0)
-        self.declare_parameter('filter_reset_on_invalid', True)
 
         self.uwb_distances_topic = str(
             self.get_parameter('uwb_distances_topic').value
@@ -164,23 +136,15 @@ class UwbPositionPublisher(Node):
             float(self.get_parameter(f'anchor_{i}_height_difference_m').value)
             for i in range(1, 4)
         )
-        self.min_anchor_determinant = float(
-            self.get_parameter('min_anchor_determinant').value
+        self.use_least_squares = bool(
+            self.get_parameter('use_least_squares').value
         )
         self.moving_average_window = int(
             self.get_parameter('moving_average_window').value
         )
-        self.max_position_jump_m = float(
-            self.get_parameter('max_position_jump_m').value
-        )
-        self.filter_reset_on_invalid = bool(
-            self.get_parameter('filter_reset_on_invalid').value
-        )
         self._validate_parameters()
         self.position_filter = PositionFilter(
             self.moving_average_window,
-            self.max_position_jump_m,
-            self.filter_reset_on_invalid,
         )
 
         self.publisher_ = self.create_publisher(
@@ -198,9 +162,9 @@ class UwbPositionPublisher(Node):
         self.get_logger().info(
             'subscribing %s, publishing %s, '
             'anchor_1=(%.3f, %.3f) anchor_2=(%.3f, %.3f) '
-            'anchor_3=(%.3f, %.3f) min_anchor_determinant=%.3e '
-            'moving_average_window=%d max_position_jump_m=%.3f '
-            'filter_reset_on_invalid=%s'
+            'anchor_3=(%.3f, %.3f) '
+            'moving_average_window=%d '
+            'use_least_squares=%s'
             % (
                 self.uwb_distances_topic,
                 self.uwb_position_topic,
@@ -210,10 +174,8 @@ class UwbPositionPublisher(Node):
                 self.anchor_2[1],
                 self.anchor_3[0],
                 self.anchor_3[1],
-                self.min_anchor_determinant,
                 self.moving_average_window,
-                self.max_position_jump_m,
-                self.filter_reset_on_invalid,
+                self.use_least_squares,
             )
         )
 
@@ -231,17 +193,12 @@ class UwbPositionPublisher(Node):
             self.anchor_2[1],
             self.anchor_3[0],
             self.anchor_3[1],
-            self.min_anchor_determinant,
         ):
             raise ValueError(
-                'anchor coordinates and min_anchor_determinant must be finite'
+                'anchor coordinates must be finite'
             )
-        if self.min_anchor_determinant <= 0.0:
-            raise ValueError('min_anchor_determinant must be greater than 0')
         if self.moving_average_window <= 0:
             raise ValueError('moving_average_window must be greater than 0')
-        if not is_finite(self.max_position_jump_m):
-            raise ValueError('max_position_jump_m must be finite')
 
     def uwb_distances_callback(self, msg: UwbDistances):
         position_msg = build_position_message(
@@ -249,8 +206,8 @@ class UwbPositionPublisher(Node):
             self.anchor_1,
             self.anchor_2,
             self.anchor_3,
-            self.min_anchor_determinant,
             self.height_differences,
+            use_least_squares=self.use_least_squares,
         )
         position_msg = self.position_filter.filter(position_msg)
         self.publisher_.publish(position_msg)

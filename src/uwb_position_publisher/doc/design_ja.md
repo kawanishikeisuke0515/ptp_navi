@@ -6,6 +6,17 @@
 
 `uwb_distance_publisher` は測距データの取り込み、入力検証、単位変換、無効値判定、再接続処理を担当する。`uwb_position_publisher` は `/uwb/distances` を subscribe し、アンカー座標を用いて 2D 位置推定を担当する。
 
+位置推定ノードの起動時パラメータ `use_least_squares` は、既定値
+`false` で従来の線形解を使用する。`config/uwb_position_publisher.yaml`
+で `true` にすると、線形解を初期値として、高さの差を含む予測距離と
+UWB 実測距離の残差二乗和を最小化する補正を行う。減衰付き
+Gauss-Newton 法を最大40回反復し、残差が改善した更新だけを採用する。
+改善できない場合は線形解を維持する。無効な測距値やアンカー配置は
+従来どおり無効と判定する。補正は移動平均の前に適用する。
+この設定は起動時に読み込むため、変更後は位置推定ノードを再起動する。
+`uwb_position_logger` は publish された補正後の位置をそのまま記録する。
+独自に位置を計算する `uwb_optitrack_logger` の計算方式は従来どおりである。
+
 ## 2. 設計方針
 
 - シリアル入力と距離 publish の責務を `uwb_distance_publisher` に閉じる。
@@ -139,10 +150,7 @@ executable: uwb_position_logger
 | `anchor_2_y` | double | `0.0` | アンカー 2 の y 座標 [m] |
 | `anchor_3_x` | double | `0.0` | アンカー 3 の x 座標 [m] |
 | `anchor_3_y` | double | `1.0` | アンカー 3 の y 座標 [m] |
-| `min_anchor_determinant` | double | `1.0e-9` | アンカー配置の特異判定しきい値 |
 | `moving_average_window` | int | `5` | `/uwb/position` の `x_m`, `y_m` に適用する移動平均サンプル数 |
-| `max_position_jump_m` | double | `1.0` | 前回フィルタ済み位置からこの距離 [m] を超えて飛んだ valid サンプルを移動平均に入れず、直前のフィルタ済み位置を保持する。`0.0` 以下で無効 |
-| `filter_reset_on_invalid` | bool | `true` | invalid サンプル受信時に移動平均バッファをリセットする |
 
 ### 5.3 `uwb_position_logger`
 
@@ -533,10 +541,7 @@ uwb_position_publisher:
     anchor_2_y: 0.0
     anchor_3_x: 0.0
     anchor_3_y: 1.0
-    min_anchor_determinant: 1.0e-9
     moving_average_window: 5
-    max_position_jump_m: 1.0
-    filter_reset_on_invalid: true
 
 uwb_position_logger:
   ros__parameters:

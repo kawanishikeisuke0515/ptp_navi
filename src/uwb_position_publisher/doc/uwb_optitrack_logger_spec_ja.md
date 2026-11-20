@@ -101,7 +101,6 @@ pose.orientation.w
 | `anchor_2_y` | double | `0.0` | アンカー 2 の y 座標 [m] |
 | `anchor_3_x` | double | `0.0` | アンカー 3 の x 座標 [m] |
 | `anchor_3_y` | double | `1.0` | アンカー 3 の y 座標 [m] |
-| `min_anchor_determinant` | double | `1.0e-9` | 3 点測位の行列特異判定しきい値 |
 
 ### 5.1 Parameter Validation
 
@@ -112,7 +111,6 @@ pose.orientation.w
 - `output_dir` が空文字列ではない
 - `uwb_topic` が空文字列ではない
 - `optitrack_pose_topic` が空文字列ではない
-- `min_anchor_determinant > 0.0`
 
 条件を満たさない場合は `ValueError` を送出し、ノードを起動しない。
 
@@ -241,7 +239,7 @@ r1, r2, r3
 - `anchor_1_distance_m`, `anchor_2_distance_m`, `anchor_3_distance_m` が有限値である
 - アンカー 3 点が同一直線上ではない
 
-アンカー 3 点の行列 determinant の絶対値が `min_anchor_determinant` 以下の場合、同一直線上または数値的に不安定と判断する。
+アンカー 3 点の行列 determinant がゼロの場合、位置を一意に計算できないため無効と判断する。
 
 推定できない場合は以下のように出力する。
 

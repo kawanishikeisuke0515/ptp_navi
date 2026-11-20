@@ -49,7 +49,6 @@ class UwbOptitrackLogger(Node):
         self.declare_parameter('anchor_3_y', 1.0)
         for i in range(1, 4):
             self.declare_parameter(f'anchor_{i}_height_difference_m', 0.0)
-        self.declare_parameter('min_anchor_determinant', 1.0e-9)
 
         self.output_dir = str(self.get_parameter('output_dir').value)
         self.log_rate = float(self.get_parameter('log_rate').value)
@@ -75,9 +74,6 @@ class UwbOptitrackLogger(Node):
         self.height_differences = tuple(
             float(self.get_parameter(f'anchor_{i}_height_difference_m').value)
             for i in range(1, 4)
-        )
-        self.min_anchor_determinant = float(
-            self.get_parameter('min_anchor_determinant').value
         )
         self._validate_parameters()
 
@@ -154,8 +150,6 @@ class UwbOptitrackLogger(Node):
             raise ValueError('uwb_topic must not be empty')
         if self.optitrack_pose_topic == '':
             raise ValueError('optitrack_pose_topic must not be empty')
-        if self.min_anchor_determinant <= 0.0:
-            raise ValueError('min_anchor_determinant must be greater than 0')
 
     def uwb_callback(self, msg: UwbDistances):
         """Store the latest UWB distance message."""
@@ -288,7 +282,6 @@ class UwbOptitrackLogger(Node):
             float(uwb.anchor_1_distance_m),
             float(uwb.anchor_2_distance_m),
             float(uwb.anchor_3_distance_m),
-            self.min_anchor_determinant,
             self.height_differences,
         )
 
