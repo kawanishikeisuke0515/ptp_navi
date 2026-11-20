@@ -60,33 +60,39 @@ def test_init_timeout_and_late_callback():
     assert c.state == 'INIT'  # Gap must not be hidden by the new input.
 
 
-def test_goal_hold_requires_fresh_updates_and_complete_latches():
+@pytest.mark.parametrize('offset, complete', [(0., True), (.125, True), (.126, False)])
+def test_single_fresh_pose_completes_at_tolerance_boundary(offset, complete):
+    c = ready(goal_tolerance_m=.125)
+    c.receive(2., offset, 1., .4, .4)
+    assert c.state == ('COMPLETE' if complete else 'DRIVE')
+    if complete:
+        assert c.tick(.41) == (0., 0., 0.)
+        assert not c.receive(3., 0., 0., .5, .5)
+        assert c.tick(100.) == (0., 0., 0.)
+        assert c.state == 'COMPLETE'
+
+
+def test_overshoot_outside_tolerance_returns_toward_goal():
     c = ready()
-    c.receive(2., 0., 0., .4, .4)
-    assert c.state == 'GOAL_CHECK' and c.tick(.45) == (0., 0., 0.)
-    for i in range(1, 12):
-        t = .4 + i * .2
-        c.receive(2., 0., 0., t, t)
+    c.receive(2.2, 0., 0., .4, .4)
+    assert c.state == 'DRIVE'
+    assert c.tick(.41)[0] < 0
+    c.receive(2., 0., 0., .5, .5)
     assert c.state == 'COMPLETE'
-    assert c.tick(100.) == (0., 0., 0.)
-    c = ready()
-    c.receive(2., 0., 0., .4, .4)
-    c.tick(2.5)
-    assert c.state == 'ERROR'
 
 
-def test_goal_exit_resets_hold():
+@pytest.mark.parametrize('stamp, now', [(.2, .3), (.1, .3), (.9, .3), (.3, 1.)])
+def test_invalid_or_late_goal_pose_cannot_complete(stamp, now):
     c = ready()
-    c.receive(2., 0., 0., .4, .4)
-    c.receive(2.2, 0., 0., .6, .6)
-    assert c.state == 'DRIVE' and c.hold_started is None
-    assert c.tick(.61)[0] < 0
+    c.receive(2., 0., 0., stamp, now)
+    assert c.state != 'COMPLETE'
+    assert c.tick(now) == (0., 0., 0.)
 
 
 def test_coincident_goal_no_division():
     c = Controller(Config(0., 0., init_sample_count=1), 0.)
     c.receive(0., 0., 0., 0., 0.)
-    assert c.state == 'GOAL_CHECK'
+    assert c.state == 'COMPLETE'
     assert c.tick(.1) == (0., 0., 0.)
 
 
@@ -120,14 +126,14 @@ def test_external_failure_recovery_and_terminal_state():
     c = ready()
     c.fail('frame_mismatch')
     assert c.state == 'ERROR' and c.reason == 'frame_mismatch'
-    assert c.a is None and c.hold_started is None
+    assert c.a is None
     c.receive(0., 0., 0., .3, .3)
     assert c.state == 'INIT' and c.reason == ''
     assert c.init_started == .3 and len(c.samples) == 1
 
-    c = Controller(Config(0., 0., init_sample_count=1, goal_hold_sec=.2), 0.)
+    c = Controller(Config(0., 0., init_sample_count=1), 0.)
     c.receive(0., 0., 0., 0., 0.)
-    assert c.a == (0., 0.) and c.hold_started == 0.
+    assert c.a == (0., 0.)
     c.receive(0., 0., 0., .2, .2)
     assert c.state == 'COMPLETE'
     c.fail('frame_mismatch')
@@ -138,7 +144,7 @@ def test_obstacle_pause_preserves_path_and_requires_continuous_clear():
     c = ready()
     start = c.a
     c.receive_obstacle(True, .21)
-    assert c.state == 'PAUSE' and c.hold_started is None
+    assert c.state == 'PAUSE'
     assert c.tick(.22) == (0., 0., 0.)
     for t in (.3, .5, .7):
         c.receive(1., 0., 0., t, t)
@@ -173,42 +179,38 @@ def test_obstacle_monitor_timeout_stops_drive_and_pose_timeout_is_error():
     assert c.state == 'ERROR' and c.reason == 'pose_timeout'
 
 
-def test_pause_resume_uses_current_position_and_restarts_goal_hold():
-    c = ready(goal_hold_sec=.4, obstacle_clear_sec=.2)
-    c.receive(1., 0., 0., .3, .3)
-    c.receive_obstacle(True, .31)
-    assert c.state == 'PAUSE' and c.hold_started is None
-    c.receive(2., 0., 0., .4, .4)
-    c.receive_obstacle(False, .4)
-    c.receive(2., 0., 0., .6, .6)
-    c.receive_obstacle(False, .61)
-    assert c.state == 'GOAL_CHECK' and c.hold_started == .61
-    c.receive(2., 0., 0., .8, .8)
-    assert c.state == 'GOAL_CHECK'
-    c.receive(2., 0., 0., 1.02, 1.02)
-    assert c.state == 'COMPLETE'
-    c.receive_obstacle(True, 1.03)
-    assert c.state == 'COMPLETE'
-
-
-def test_goal_check_continues_despite_obstacle():
-    c = ready(goal_hold_sec=.4)
-    c.receive(2., 0., 0., .3, .3)
-    c.receive_obstacle(True, .31)
-    assert c.state == 'GOAL_CHECK' and c.hold_started == .3
-    assert c.tick(.32) == (0., 0., 0.)
-    c.receive(2., 0., 0., .5, .5)
-    c.receive(2., 0., 0., .71, .71)
-    assert c.state == 'COMPLETE'
-
-
-def test_goal_exit_with_obstacle_pauses_without_drive_command():
+@pytest.mark.parametrize('mode', ['detected', 'stale', 'clearing'])
+def test_goal_during_obstacle_pause_completes(mode):
     c = ready()
-    c.receive(2., 0., 0., .3, .3)
-    c.receive_obstacle(True, .31)
-    c.receive(1., 0., 0., .4, .4)
-    assert c.state == 'PAUSE' and c.hold_started is None
-    assert c.tick(.41) == (0., 0., 0.)
+    if mode == 'detected':
+        c.receive_obstacle(True, .21)
+        arrival = .3
+    elif mode == 'clearing':
+        c.receive_obstacle(False, .21)
+        arrival = .3
+    else:
+        c.receive_obstacle(False, .21)
+        c.receive(1., 0., 0., .5, .5)
+        c.tick(.82)
+        arrival = .83
+    assert c.state == 'PAUSE'
+    c.receive(2., 0., 0., arrival, arrival)
+    assert c.state == 'COMPLETE' and c.reason == ''
+    c.receive_obstacle(True, arrival + .01)
+    assert c.tick(arrival + .02) == (0., 0., 0.)
+    assert c.state == 'COMPLETE'
+
+
+@pytest.mark.parametrize('positions, expected', [((0., 2.), 'COMPLETE'), ((4., 0.), 'PAUSE')])
+def test_init_arrival_uses_latest_pose_not_average_despite_obstacle(positions, expected):
+    c = Controller(Config(2., 0., init_sample_count=2), 0.)
+    c.receive_obstacle(True, 0.)
+    c.receive(positions[0], 0., 0., .1, .1)
+    assert c.state == 'INIT'
+    c.receive(positions[1], 0., 0., .2, .2)
+    assert c.state == expected
+    assert c.a == (sum(positions) / 2, 0.)
+    assert c.tick(.21) == (0., 0., 0.)
 
 
 def test_obstacle_during_init_blocks_start_and_keeps_initial_average():
@@ -221,7 +223,7 @@ def test_obstacle_during_init_blocks_start_and_keeps_initial_average():
 
 @pytest.mark.parametrize('kwargs', [
     {'goal_x': math.nan}, {'control_rate_hz': 0.}, {'init_sample_count': 2.5},
-    {'min_linear_speed_m_s': 1.}, {'goal_hold_sec': -1.},
+    {'min_linear_speed_m_s': 1.}, {'goal_tolerance_m': -1.},
 ])
 def test_invalid_config(kwargs):
     params = dict(goal_x=2., goal_y=0.)

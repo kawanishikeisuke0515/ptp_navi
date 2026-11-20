@@ -70,11 +70,12 @@ COMPLETE後は停止を維持し、別の目標で走行する場合は設定変
 `PAUSE` に遷移し、その受信コールバックでゼロ速度を送信する。
 初期化中に検知した場合も、サンプル収集完了後は走行せず `PAUSE` に入る。
 開始位置と目標は保持し、停止中も位置情報を更新する。
-`GOAL_CHECK` 中はゼロ速度のまま到達判定を続ける。
-ゴール範囲から外れた際に障害物による走行制限があれば、走行せず `PAUSE` に入る。
+`DRIVE`・`PAUSE` 中は、新規有効位置が一度でもゴール許容範囲内に入ると
+`COMPLETE` に遷移し、即時ゼロ指令を送信する。初期化完了時も同じ判定を行う。
+入力異常を最優先とし、到着判定は障害物による走行制限より優先する。
 
 false が `obstacle_clear_sec`（既定1秒）継続すると、新しい false の受信時に復帰する。
-現在位置がゴール範囲外なら `DRIVE`、範囲内なら `GOAL_CHECK` に戻り、ゴール保持時間を計り直す。
+現在位置がゴール範囲外なら `DRIVE` に戻る。範囲内なら `COMPLETE` とする。
 途中の true、または `obstacle_timeout_sec`（既定0.6秒）以上の受信間隔で解除待ち時間をリセットする。
 受信途絶は `PAUSE`、位置情報の異常・途絶は `ERROR` を優先する。`COMPLETE` は維持する。
 
@@ -92,6 +93,8 @@ ROS_LOG_DIR=/tmp/path_control_test_logs ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST 
 
 制御・状態遷移の単体テストと、実ROSトピックによる駆動指令・異常停止の統合テストを含む。
 実機での座標整合・追従性は未検証。UWBの移動平均遅延はそのまま残る。
+
+到着確認の保持時間は設けない。COMPLETE後は位置が許容範囲外に出ても再走行しない。
 
 - [全体仕様（Markdown）](docs/path_control_parameters_ja.md)
 - [全体仕様（HTML）](docs/path_control_parameters_ja.html)

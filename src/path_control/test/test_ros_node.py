@@ -60,3 +60,28 @@ def test_topics_and_readonly_parameters():
         if probe is not None:
             probe.destroy_node()
         rclpy.shutdown()
+
+
+@pytest.mark.parametrize('paused', [False, True])
+def test_goal_pose_callback_publishes_zero_immediately(paused):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from path_control.core import Config, Controller
+
+    control = Controller(Config(2., 0., init_sample_count=1), 0.)
+    control.receive(0., 0., 0., 0., 0.)
+    if paused:
+        control.receive_obstacle(True, .1)
+    publisher = Mock()
+    adapter = SimpleNamespace(control=control, world_frame='world',
+                              command_pub=publisher, now=lambda: .2)
+    msg = PoseStamped()
+    msg.header.frame_id = 'world'
+    msg.header.stamp.nanosec = 200000000
+    msg.pose.position.x = 2.
+    msg.pose.orientation.w = 1.
+    PathControl.receive(adapter, msg)
+    assert control.state == 'COMPLETE'
+    publisher.publish.assert_called_once()
+    command = publisher.publish.call_args.args[0]
+    assert (command.linear.x, command.linear.y, command.angular.z) == (0., 0., 0.)

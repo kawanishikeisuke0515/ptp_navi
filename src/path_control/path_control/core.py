@@ -19,7 +19,6 @@ class Config:
     heading_timeout_sec: float = 0.6
     init_sample_count: int = 10
     goal_tolerance_m: float = 0.1
-    goal_hold_sec: float = 2.0
     obstacle_clear_sec: float = 1.0
     obstacle_timeout_sec: float = 0.6
 
@@ -71,7 +70,6 @@ class Controller:
         self.pose = None
         self.stamp = None
         self.received = None
-        self.hold_started = None
         self.last_now = now
         self.obstacle_detected = False
         self.obstacle_received = None
@@ -110,16 +108,21 @@ class Controller:
         obstacle_reason = ('obstacle_timeout' if obstacle_stale else
                            'obstacle_detected' if self.obstacle_detected else 'obstacle_clearing')
 
+        # Only fresh validated poses can complete a run. Input expiry was
+        # checked before storage; arrival takes priority over obstacle pauses.
+        if event == 'pose' and (
+                self.state in ('DRIVE', 'PAUSE') or
+                (self.state == 'INIT' and len(self.samples) >= self.c.init_sample_count)):
+            if math.hypot(self.c.goal_x - self.pose[0],
+                          self.c.goal_y - self.pose[1]) <= self.c.goal_tolerance_m:
+                return 'COMPLETE', ''
+
         if self.state == 'INIT':
             if event == 'timer' and now - self.init_started >= self.c.init_timeout_sec:
                 return 'ERROR', 'init_timeout'
             if event == 'pose' and len(self.samples) >= self.c.init_sample_count:
                 if obstacle_blocked:
                     return 'PAUSE', obstacle_reason
-                distance = math.hypot(self.c.goal_x - self.pose[0], self.c.goal_y - self.pose[1])
-                # Initialization may finish directly inside the goal region.
-                if distance <= self.c.goal_tolerance_m:
-                    return 'GOAL_CHECK', self.reason
                 return 'DRIVE', self.reason
 
         elif self.state == 'DRIVE':
@@ -128,21 +131,6 @@ class Controller:
                 return 'ERROR', 'degenerate_path'
             if obstacle_blocked:
                 return 'PAUSE', obstacle_reason
-            if event == 'pose':
-                distance = math.hypot(self.c.goal_x - self.pose[0], self.c.goal_y - self.pose[1])
-                if distance <= self.c.goal_tolerance_m:
-                    return 'GOAL_CHECK', self.reason
-
-        elif self.state == 'GOAL_CHECK':
-            if event == 'pose':
-                distance = math.hypot(self.c.goal_x - self.pose[0], self.c.goal_y - self.pose[1])
-                if distance > self.c.goal_tolerance_m:
-                    if obstacle_blocked:
-                        return 'PAUSE', obstacle_reason
-                    return 'DRIVE', self.reason
-                if self.stamp - self.hold_started >= self.c.goal_hold_sec:
-                    return 'COMPLETE', self.reason
-
         elif self.state == 'PAUSE':
             if obstacle_blocked:
                 return 'PAUSE', obstacle_reason
@@ -151,7 +139,7 @@ class Controller:
                     and now - self.obstacle_clear_started >= self.c.obstacle_clear_sec):
                 distance = math.hypot(self.c.goal_x - self.pose[0], self.c.goal_y - self.pose[1])
                 if distance <= self.c.goal_tolerance_m:
-                    return 'GOAL_CHECK', ''
+                    return 'COMPLETE', ''
                 return 'DRIVE', ''
 
         elif self.state == 'ERROR':
@@ -169,20 +157,14 @@ class Controller:
         if next_state == 'ERROR':
             self.samples.clear()
             self.a = None
-            self.hold_started = None
         elif next_state != previous:
             if next_state == 'INIT':
                 self.init_started = now
                 self.samples.clear()
                 self.a = None
-            if previous == 'INIT' and next_state in ('DRIVE', 'GOAL_CHECK', 'PAUSE'):
+            if previous == 'INIT' and next_state in ('DRIVE', 'COMPLETE', 'PAUSE'):
                 self.a = tuple(sum(p[i] for p in self.samples) / len(self.samples)
                                for i in (0, 1))
-            if next_state == 'GOAL_CHECK':
-                # After PAUSE, do not count time preceding obstacle clearance.
-                self.hold_started = now if previous == 'PAUSE' else self.stamp
-            elif next_state in ('DRIVE', 'PAUSE'):
-                self.hold_started = None
 
     def _clock(self, now):
         if now < self.last_now:

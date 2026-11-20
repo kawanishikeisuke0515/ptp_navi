@@ -12,8 +12,9 @@ a{color:var(--blue)}footer{margin-top:36px;border-top:1px solid var(--line);padd
 @media(max-width:700px){main{margin:0;padding:28px 20px;border-radius:0}h1{font-size:1.6rem}th,td{padding:9px}}
 @media print{body{background:white}main{max-width:none;margin:0;padding:0;box-shadow:none}h2{break-after:avoid}tr{break-inside:avoid}footer{display:none}}
 pre{background:#edf3f8;padding:18px;overflow-x:auto;line-height:1.7;border-left:3px solid #185b87}pre code{background:none;padding:0}nav{display:flex;flex-wrap:wrap;gap:12px;margin:20px 0}</style></head><body><main><p class="eyebrow">PTP NAVI / PATH CONTROL</p><nav aria-label="目次"><a href="#section-1">構成</a><a href="#section-2">入出力</a><a href="#section-3">パラメーター</a><a href="#section-5">制御式</a><a href="#section-8">状態遷移</a><a href="#section-10">未決定事項</a></nav><h1>Path Control 全体仕様</h1>
-<p>2026-10-26｜実装仕様・実機未検証</p>
+<p>2026-11-20｜改訂実装仕様・実機未検証</p>
 <p>添付の「直線 Path Control 仕様書」ドラフトv1.0を基に、採用済みの制御周期・回転速度上限・初期化タイムアウトと、deadmanを使用しない構成を反映した。ファイル名は既存リンクを維持するため従来のままとする。未決定事項は末尾にまとめる。</p>
+<p>今回の改訂では <code>GOAL_CHECK</code> を廃止し、<code>DRIVE</code> の新規有効位置1回で到着を判定する。<code>goal_hold_sec</code> と保持時間の管理も廃止する。本文は変更後の仕様を示す。コード・設定・テストに本改訂を反映済み。</p>
 <h2 id="section-1">1. 目的とシステム構成</h2>
 <p>全方向移動ロボットを、始点Aから終点Bへ向かう直線経路に沿って走行させる。経路方向の移動、横ずれ補正、車体方向の補正を同時に行う。目標車体方向は走行中、A→Bの方向に固定する。</p>
 <pre><code class="language-text">UWB機器（有効5 Hz）
@@ -72,7 +73,7 @@ ZED → zed_heading_publisher → /zed/heading   │
 </tr>
 </tbody>
 </table></div>
-<p><code>/deadman</code> は使用しない。Path Controlが非ゼロ指令を出すと下位系が駆動する。INIT・ERROR・GOAL_CHECK・COMPLETEではゼロ指令を継続する。指令の発行元は一つにする。別の開始操作は設けず、起動後の初期化が完了したら自動で走行を開始する。ERRORからの復帰時もINITでの再初期化完了後に自動で再開する。</p>
+<p><code>/deadman</code> は使用しない。Path Controlが非ゼロ指令を出すと下位系が駆動する。INIT・PAUSE・ERROR・COMPLETEではゼロ指令を継続する。指令の発行元は一つにする。別の開始操作は設けず、起動後の初期化が完了したら自動で走行を開始する。ERRORからの復帰時もINITでの再初期化完了後に自動で再開する。</p>
 <h3>座標整合の確認点</h3>
 <p>既存の <code>uwb_robot_pose_publisher</code> は、ZEDの <code>robot_yaw_rad</code> にπ/2を加えた角度でタグ補正と姿勢出力を行う。これがUWBワールド+x方向＝yaw 0と一致するか実機で確認する。Path Control側で同じ補正を重ねない。</p>
 <p>校正ツールは校正開始時の向きを基準としたzero_heading_degを生成する。その開始方向とUWBワールド軸の対応も確認が必要。</p>
@@ -154,14 +155,9 @@ ZED → zed_heading_publisher → /zed/heading   │
 <td><code>goal_tolerance_m</code></td>
 <td>0.10 m</td>
 </tr>
-<tr>
-<td>到着確認時間</td>
-<td><code>goal_hold_sec</code></td>
-<td>2.0秒</td>
-</tr>
 </tbody>
 </table></div>
-<p>上記の名称で実装。終点近傍での減速、加速度制限、Path Control独自の車輪RPM制限は設けない。下位の <code>locomotion_core_rpm</code> による車輪RPM上限制限は引き続き適用される。</p>
+<p>上記の名称を使用する。<code>goal_hold_sec</code> は設定項目から削除する。終点近傍での減速、加速度制限、Path Control独自の車輪RPM制限は設けない。下位の <code>locomotion_core_rpm</code> による車輪RPM上限制限は引き続き適用される。</p>
 <h2 id="section-4">4. 始点Aの初期化</h2>
 <p>INITに入った時点から10秒を計測する。車体は停止指令を維持し、新規の有効な車体中心位置をN個取得する。</p>
 <pre><code class="language-text">A.x = Σ x_i / N
@@ -169,7 +165,7 @@ A.y = Σ y_i / N
 N = 10（変更可能）
 </code></pre>
 <p>UWBの有効更新は5 Hz。別々の新規サンプルだけを数え、20 Hzの制御周期で同じ位置を重複計上しない。10個の取得は初回から最短約1.8秒。無効サンプルは平均に含めない。</p>
-<p>10秒以内に揃わなければERRORへ移行する。取得後のAは走行中固定する。Bから0.10 m以内なら経路単位ベクトルを計算せずGOAL_CHECKへ進む。それ以外はA→Bの経路を作成してDRIVEへ進む。ERRORから復帰した場合はAと収集中サンプルを破棄し、再取得する。Bは維持する。</p>
+<p>10秒以内に揃わなければERRORへ移行する。取得後のAは走行中固定する。サンプル収集を完了した最新の有効位置PがBから <code>goal_tolerance_m</code> 以内なら、経路単位ベクトルを計算せずCOMPLETEへ進む。到着判定には平均位置Aを使用しない。範囲外で障害物による走行制限があればPAUSE、それ以外はA→Bの経路を作成してDRIVEへ進む。ERRORから復帰した場合はAと収集中サンプルを破棄し、再取得する。Bは維持する。</p>
 <h2 id="section-5">5. 経路追従の制御式</h2>
 <h3>5.1 経路方向への移動</h3>
 <pre><code class="language-text">L = sqrt((B.x − A.x)^2 + (B.y − A.y)^2)
@@ -207,14 +203,20 @@ K_theta = 1.0 [1/s]
 </code></pre>
 <p>短い方向に回転する。横ずれ補正中も車体方向はA→Bのままとし、移動方向だけが斜めになる。</p>
 <h2 id="section-6">6. 到着判定</h2>
+<p>DRIVEで新しい有効Poseを受信するたびに、車体中心位置Pと終点Bの平面距離を評価する。</p>
 <pre><code class="language-text">d_goal = norm(B − P)
-d_goal ≤ 0.10 m → GOAL_CHECK（並進・回転ともゼロ）
+d_goal ≤ goal_tolerance_m（既定0.10 m） → COMPLETE
 </code></pre>
-<p>新規有効位置で範囲内が2秒以上継続したことを確認してCOMPLETEへ進む。同じ位置を保持したまま壁時計で2秒経過しても完了にしない。新規位置の時刻で継続時間を評価し、入力の鮮度も満たす必要がある。</p>
-<p>範囲外なら確認時間をリセットしDRIVEへ戻る。異常ならリセットしERRORへ移行する。COMPLETE後は停止を維持する。停止は速度指令ゼロを意味し、実際の車輪停止を確認する機能は現構成にない。</p>
+<p>範囲内の位置を1回受信した時点で到着とする。保持時間、連続サンプル数、姿勢角、実速度は完了条件に含めない。制御タイマーで同じ位置を再評価して到着を成立させることはしない。INITのサンプル収集完了時とPAUSE中も、新しい有効位置に同じ到着条件を適用する。</p>
+<p>COMPLETEへの遷移時は、受信コールバックで並進・回転ともゼロ指令を即時配信する。その後も20 Hzでゼロ指令を維持し、位置が範囲外に出ても走行を再開しない。再走行にはノード再起動を必要とする。停止は速度指令ゼロを意味し、実際の車輪停止や停止後の位置が許容範囲内に収まることを保証するものではない。</p>
+<p>入力異常・鮮度異常は到着判定より優先する。新規Poseの受信前に既存入力のタイムアウトを確認し、遅れて届いたPoseでタイムアウトを隠さない。到着判定は障害物によるPAUSEより優先し、有効位置が範囲内なら障害物の検知・受信途絶・解除待ちの状態でもCOMPLETEへ進む。</p>
+<p>範囲外なら到着とせず、走行可能な場合は経路追従を続ける。終点通過後は経路方向の速度を反転して戻る。位置のばらつきによる一度だけの範囲内判定も到着として受け入れる。範囲内のサンプルが得られなければ往復が続く可能性があるが、今回の変更では走行時間上限や進捗停滞によるエラー判定は追加しない。既存の入力異常・タイムアウト判定は維持する。</p>
+<h3>6.1 障害物による一時停止</h3>
+<p>障害物情報の監視は最初の受信から開始する。検知true、監視開始後の受信途絶、解除待ち中は走行を制限する。到着範囲外のDRIVEはPAUSEへ遷移し、INITではサンプル収集完了後も走行を開始しない。PAUSE中は始点Aと終点Bを保持し、新規有効位置による到着判定を続ける。</p>
+<p>falseが <code>obstacle_clear_sec</code>（既定1秒）継続し、新しいfalseを受信した時点で、到着範囲外ならDRIVEへ復帰する。途中のtrue、または <code>obstacle_timeout_sec</code>（既定0.6秒）以上の受信間隔で解除待ち時間をリセットする。復帰時にも最新の有効位置が到着範囲内ならCOMPLETEとする。位置入力異常はERRORを優先する。COMPLETE後は障害物情報によって状態を変更しない。</p>
 <h2 id="section-7">7. 入力異常と復帰</h2>
 <p>位置または姿勢が0.6秒以上更新されなければERRORへ移行し、ゼロ指令と異常通知を維持する。INITの未受信待機は10秒の初期化制限を適用する。</p>
-<p>異常発生後の新しい有効データで位置・姿勢の両方が正常であることを確認したら解除を通知し、必ずINITへ戻る。過去のA、平均サンプル、到着確認時間を破棄し、Bは維持する。</p>
+<p>異常発生後の新しい有効データで位置・姿勢の両方が正常であることを確認したら解除を通知し、必ずINITへ戻る。過去のA、平均サンプルを破棄し、Bは維持する。</p>
 <p>統合Poseにはvalidフラグがなく、上流は無効入力や同期失敗時にPoseを配信しない。統合Poseのみを購読する場合、位置・姿勢の更新停止は共通のPose更新停止として検出する。原因を区別するには元の <code>/uwb/position</code> と <code>/zed/heading</code> の監視または上流の状態通知が必要。</p>
 <p>非有限値、不正Quaternion（ノルム誤差0.01超）、frame_id不一致、重複・逆順・未来stampをERRORとする。受信停止とheader.stampの古さをともに判定し、ROS時刻の逆行時も停止して再初期化する。異常入力を初期化・到着確認の有効サンプルに含めない。</p>
 <h2 id="section-8">8. 状態遷移</h2>
@@ -230,21 +232,21 @@ d_goal ≤ 0.10 m → GOAL_CHECK（並進・回転ともゼロ）
 <tr>
 <td>INIT</td>
 <td>ゼロ指令、新規位置10個を平均</td>
-<td>取得完了→DRIVEまたはGOAL_CHECK。10秒超過・入力異常→ERROR</td>
+<td>取得完了時に範囲内→COMPLETE。範囲外→DRIVEまたは障害物によるPAUSE。10秒以上・入力異常→ERROR</td>
 </tr>
 <tr>
 <td>DRIVE</td>
-<td>経路速度・横ずれ・角度補正、速度制限</td>
-<td>到着範囲内→GOAL_CHECK。入力異常→ERROR</td>
+<td>新規有効位置で到着判定、範囲外では経路追従・速度制限</td>
+<td>範囲内→COMPLETE。障害物による走行制限→PAUSE。入力異常→ERROR</td>
 </tr>
 <tr>
-<td>GOAL_CHECK</td>
-<td>ゼロ指令、新規位置で2秒継続を確認</td>
-<td>継続成立→COMPLETE。範囲外→DRIVE。入力異常→ERROR</td>
+<td>PAUSE</td>
+<td>ゼロ指令、A・Bを保持、新規有効位置で到着判定</td>
+<td>範囲内→COMPLETE。障害物の解除成立→DRIVE。入力異常→ERROR</td>
 </tr>
 <tr>
 <td>ERROR</td>
-<td>ゼロ指令、異常通知、確認時間を破棄</td>
+<td>ゼロ指令、異常通知、初期化データを破棄</td>
 <td>新規の正常位置・姿勢を確認→INIT</td>
 </tr>
 <tr>
@@ -254,7 +256,7 @@ d_goal ≤ 0.10 m → GOAL_CHECK（並進・回転ともゼロ）
 </tr>
 </tbody>
 </table></div>
-<p>処理順は異常判定・停止条件を速度生成より優先する。INIT・DRIVE・GOAL_CHECKの入力異常時は到着判定よりERRORを優先する。COMPLETEは入力状態にかかわらずゼロ指令を維持する。</p>
+<p>処理順は、COMPLETEの維持を最優先とする。それ以外では入力異常・タイムアウト、到着判定、障害物による走行制限、速度生成の順に評価する。INITではサンプル収集完了後に到着判定を行う。ERRORからの復帰は必ずINITを経由する。</p>
 <h2 id="section-9">9. 更新周期・遅延と下位系</h2>
 <p>制御演算とTwist配信は20 Hz、位置情報は実効5 Hz。新規入力の間は最後の有効値を保持するが、更新停止判定を継続する。更新レートを上げても位置計測そのものは増えない。</p>
 <p>既存UWB位置推定は5点移動平均を使用する。5 Hzでは定常的な遅れが約0.4秒あり、0.3 m/s走行時に約0.12 mに相当する。平均位置には最新入力の時刻が付くため、この遅れは単純なstamp鮮度判定で検出できない。現在の方位との組み合わせによる時間的なずれも実機で評価する。</p>
@@ -264,16 +266,17 @@ d_goal ≤ 0.10 m → GOAL_CHECK（並進・回転ともゼロ）
 <ul>
 <li>UWB軸とZED方位の整合、校正時の基準方向、π/2補正の実機確認。</li>
 <li>5点移動平均の遅延に対する扱い。到着判定のヒステリシス等は実機評価後に検討する。</li>
-<li>実停止の確認方法、LiDARによる停止・回避との優先順位。</li>
+<li>実停止の確認方法、LiDARによる回避制御との連携。停止・到着の優先順位は6章のとおり。</li>
+<li>走行時間上限・進捗停滞の検知は将来検討とし、今回は追加しない。</li>
 </ul>
 <h2 id="section-11">11. 検証計画</h2>
 <ol>
 <li>座標変換、横ずれ符号、角度折り返し、並進・回転の上限制限を単体検証する。</li>
 <li>新規位置のみを数える初期化、10秒タイムアウト、ERROR復帰時のA再取得を検証する。</li>
-<li>終点手前・通過後の速度符号、到着中の離脱、欠測時に完了しないことを検証する。</li>
+<li>終点手前・通過後の速度符号、許容距離の境界を含む1回の到着判定、範囲外での追従継続を検証する。INIT完了時・PAUSE中の到着、障害物より到着を優先すること、COMPLETE後に範囲外へ出ても停止を維持することも確認する。</li>
 <li>入力停止・無効値でゼロ出力になり、古いサンプルで復帰しないことを検証する。</li>
 <li>実機で方位基準と左右・回転符号を確認し、低速で各制御成分を個別評価する。</li>
-<li>合成走行で位置、姿勢、e_CT、e_theta、速度指令、状態、入力時刻を記録し、停止距離と到着確認を評価する。</li>
+<li>合成走行で位置、姿勢、e_CT、e_theta、速度指令、状態、入力時刻を記録し、停止距離と1回判定による到着位置を評価する。</li>
 </ol>
 <p>元資料はユーザー提供の <code>path_control_spec.html</code>（ドラフトv1.0）。本書は設計の整理であり、ノードや実機動作を実装・検証したことを示すものではない。</p>
 <h2 id="section-12">12. 実装時の確定事項</h2>
