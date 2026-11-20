@@ -1,19 +1,19 @@
 zed_heading_publisher:
   ros__parameters:
     mag_topic: /zed2i/zed_node/imu/mag
-    center_x: -3.691638
-    center_z: -9.833799
-    soft_iron_matrix_00: 0.854169435
-    soft_iron_matrix_01: 0.008879010
-    soft_iron_matrix_10: 0.009879010
-    soft_iron_matrix_11: 1.170820189
-    zero_heading_deg: 35.238157
+    center_x: -0.1652857922017574
+    center_z: 0.535095602273941
+    soft_iron_matrix_00: 0.8601755152028325
+    soft_iron_matrix_01: 0.01526251989405246
+    soft_iron_matrix_10: 0.015262519894052445
+    soft_iron_matrix_11: 1.1628242455583695
+    zero_heading_deg: 36.67205243427071
     publish_rate_hz: 20.0
-    frame_id: "zed2i_mag"
+    frame_id: zed2i_mag
     invert_yaw: false
     magnetic_field_scale: 1000000.0
     diagnostic_log_interval_sec: 1.0
-    raw_x_axis: "y"
+    raw_x_axis: y
     raw_x_sign: -1.0
-    raw_z_axis: "x"
+    raw_z_axis: x
     raw_z_sign: 1.0

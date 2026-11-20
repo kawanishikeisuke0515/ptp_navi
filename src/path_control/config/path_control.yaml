@@ -12,10 +12,10 @@ path_control:
     obstacle_timeout_sec: 0.6
     world_frame_id: world
     control_rate_hz: 20.0
-    path_speed_m_s: 0.1
+    path_speed_m_s: 0.2
     min_linear_speed_m_s: 0.05
     max_linear_speed_m_s: 0.2
-    cross_track_gain: 0.025
+    cross_track_gain: 0.5
     heading_gain: 2.0
     max_angular_speed_rad_s: 0.4
     init_timeout_sec: 10.0
